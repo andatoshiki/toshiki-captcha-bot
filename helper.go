@@ -65,8 +65,15 @@ func buildSendOptionsWithTopic(parseMode tele.ParseMode, markup *tele.ReplyMarku
 	return opts
 }
 
+func topicThreadIDForChat(chat *tele.Chat, configuredThreadID int) int {
+	if chat == nil || chat.Type == tele.ChatPrivate {
+		return 0
+	}
+	return configuredThreadID
+}
+
 func sendWithConfiguredTopic(chat *tele.Chat, what interface{}, parseMode tele.ParseMode, markup *tele.ReplyMarkup) (*tele.Message, error) {
-	opts := buildSendOptions(parseMode, markup)
+	opts := buildSendOptionsWithTopic(parseMode, markup, topicThreadIDForChat(chat, cfg.Bot.TopicThreadID))
 	return bot.Send(chat, what, opts)
 }
 

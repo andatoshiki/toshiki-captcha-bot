@@ -59,6 +59,42 @@ func isSenderAllowed(c tele.Context) bool {
 	return isAllowedUserID(c.Sender().ID)
 }
 
+func isUserInChatAdmins(userID int64, admins []tele.ChatMember) bool {
+	if userID <= 0 {
+		return false
+	}
+	for _, admin := range admins {
+		if admin.User == nil {
+			continue
+		}
+		if admin.User.ID == userID {
+			return true
+		}
+	}
+	return false
+}
+
+func isSenderChatAdmin(c tele.Context) bool {
+	if c == nil || c.Sender() == nil || c.Chat() == nil || bot == nil {
+		return false
+	}
+
+	admins, err := bot.AdminsOf(c.Chat())
+	if err != nil {
+		log.Printf("warn: failed to resolve chat admins chat_id=%d err=%v", c.Chat().ID, err)
+		return false
+	}
+
+	return isUserInChatAdmins(c.Sender().ID, admins)
+}
+
+func isSenderAllowedOrAdmin(c tele.Context) bool {
+	if isSenderAllowed(c) {
+		return true
+	}
+	return isSenderChatAdmin(c)
+}
+
 func logAccessDenied(c tele.Context, event string) {
 	var chatID int64
 	var userID int64

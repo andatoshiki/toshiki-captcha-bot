@@ -82,6 +82,14 @@ func onPing(c tele.Context) error {
 	return nil
 }
 
+func onTestCaptcha(c tele.Context) error {
+	if !isSenderAllowedOrAdmin(c) {
+		logAccessDenied(c, "testcaptcha_sender_not_allowed")
+		return nil
+	}
+	return onJoin(c)
+}
+
 func onJoin(c tele.Context) error {
 	if c.Chat().Type == tele.ChatPrivate {
 		return nil
