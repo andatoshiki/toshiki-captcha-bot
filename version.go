@@ -17,7 +17,7 @@ var (
 
 func versionText() string {
 	return fmt.Sprintf(
-		"toshiki-captcha-bot\nversion: %s\ncommit: %s\nbuild_time: %s\ngo: %s %s/%s\n",
+		"toshiki-captcha-bot\nVersion: %s\nCommit: %s\nBuild time: %s\nGo: %s %s/%s\n",
 		Version,
 		Commit,
 		BuildTime,
@@ -30,7 +30,7 @@ func versionText() string {
 func versionTextMarkdown() string {
 	runtimeInfo := fmt.Sprintf("%s %s/%s", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	return fmt.Sprintf(
-		"toshiki-captcha-bot\nversion: %s\ncommit: %s\nbuild_time: %s\ngo: %s\n",
+		"toshiki-captcha-bot\nVersion: %s\nCommit: %s\nBuild time: %s\nGo: %s\n",
 		inlineCode(Version),
 		inlineCode(Commit),
 		inlineCode(BuildTime),

@@ -22,10 +22,10 @@ func TestVersionTextMarkdown(t *testing.T) {
 
 	out := versionTextMarkdown()
 	required := []string{
-		"version: `1.1.0`",
-		"commit: `da42e656c0d47c905c552b2380a5519de20d9560`",
-		"build_time: `2026-02-24T05:00:26Z`",
-		"go: `",
+		"Version: `1.1.0`",
+		"Commit: `da42e656c0d47c905c552b2380a5519de20d9560`",
+		"Build time: `2026-02-24T05:00:26Z`",
+		"Go: `",
 	}
 	for _, entry := range required {
 		if !strings.Contains(out, entry) {
