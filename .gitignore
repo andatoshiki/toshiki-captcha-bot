@@ -1,0 +1,42 @@
+# Binaries and build artifacts
+/toshiki-captcha-bot
+/golang-telegram-captcha-bot
+/dist/
+/build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.a
+*.o
+*.out
+*.test
+*.prof
+
+# Coverage
+coverage.out
+coverage.txt
+*.coverprofile
+
+# Go workspace / vendoring noise
+vendor/
+
+# Local runtime config and secrets
+config.yaml
+.env
+.env.*
+
+# Logs and temp files
+*.log
+tmp/
+
+# OS / editor files
+.DS_Store
+.idea/
+.vscode/
+
+# Local agent metadata
+.agent/
+.agents/
+skills-lock.json

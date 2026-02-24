@@ -1,0 +1,10 @@
+bot:
+  token: "123456789:telegram-bot-token"
+  poll_timeout: 10s
+  topic_link: "https://t.me/c/1234567890/4/77"
+
+captcha:
+  expiration: 1m
+  cleanup_interval: 5s
+  max_failures: 2
+  failure_notice_ttl: 15s
