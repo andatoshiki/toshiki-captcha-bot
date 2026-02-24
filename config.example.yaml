@@ -1,6 +1,8 @@
 bot:
   token: "123456789:telegram-bot-token"
   poll_timeout: 10s
+  public: true
+  allowed_user_ids: []
   topic_link: "https://t.me/c/1234567890/4/77"
 
 captcha:

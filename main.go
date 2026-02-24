@@ -42,9 +42,11 @@ func main() {
 	cfg = loadedCfg
 	db = minikv.New(cfg.Captcha.Expiration, cfg.Captcha.CleanupInterval)
 	log.Printf(
-		"Loaded config path=%q poll_timeout=%s topic_link=%q topic_thread_id=%d captcha_expiration=%s max_failures=%d",
+		"Loaded config path=%q poll_timeout=%s public=%t allowed_user_ids=%d topic_link=%q topic_thread_id=%d captcha_expiration=%s max_failures=%d",
 		opts.configPath,
 		cfg.Bot.PollTimeout,
+		cfg.Bot.Public,
+		len(cfg.Bot.allowedUsers),
 		cfg.Bot.TopicLink,
 		cfg.Bot.TopicThreadID,
 		cfg.Captcha.Expiration,
@@ -65,17 +67,12 @@ func main() {
 
 	bot = b
 
+	b.Handle("/ping", onPing)
 	b.Handle("/testcaptcha", onJoin)
+	b.Handle(tele.OnAddedToGroup, onAddedToGroup)
 	b.Handle(tele.OnUserJoined, onJoin)
 	b.Handle(tele.OnCallback, handleAnswer)
-	b.Handle(tele.OnUserLeft, func(c tele.Context) error {
-		if err := c.Delete(); err != nil {
-			log.Printf("warn: failed to delete leave-event message chat_id=%d err=%v", c.Chat().ID, err)
-		}
-		db.Delete(fmt.Sprint(c.Sender().ID))
-		log.Printf("User left user_id=%d chat_id=%d", c.Sender().ID, c.Chat().ID)
-		return nil
-	})
+	b.Handle(tele.OnUserLeft, onUserLeft)
 
 	log.Printf("Bot started and polling updates")
 	b.Start()

@@ -19,10 +19,13 @@ type runtimeConfig struct {
 }
 
 type botConfig struct {
-	Token         string        `yaml:"token"`
-	PollTimeout   time.Duration `yaml:"poll_timeout"`
-	TopicLink     string        `yaml:"topic_link"`
-	TopicThreadID int           `yaml:"-"`
+	Token          string             `yaml:"token"`
+	PollTimeout    time.Duration      `yaml:"poll_timeout"`
+	TopicLink      string             `yaml:"topic_link"`
+	Public         bool               `yaml:"public"`
+	AllowedUserIDs []int64            `yaml:"allowed_user_ids"`
+	allowedUsers   map[int64]struct{} `yaml:"-"`
+	TopicThreadID  int                `yaml:"-"`
 }
 
 type captchaConfig struct {
@@ -36,6 +39,7 @@ func defaultRuntimeConfig() runtimeConfig {
 	return runtimeConfig{
 		Bot: botConfig{
 			PollTimeout: 10 * time.Second,
+			Public:      true,
 		},
 		Captcha: captchaConfig{
 			Expiration:       1 * time.Minute,
@@ -81,6 +85,19 @@ func (c *runtimeConfig) validate() error {
 		return fmt.Errorf("bot.topic_link is invalid: %w", err)
 	}
 	c.Bot.TopicThreadID = topicThreadID
+
+	allowedUsers := make(map[int64]struct{}, len(c.Bot.AllowedUserIDs))
+	for _, userID := range c.Bot.AllowedUserIDs {
+		if userID <= 0 {
+			return fmt.Errorf("bot.allowed_user_ids must contain positive integers")
+		}
+		allowedUsers[userID] = struct{}{}
+	}
+	c.Bot.allowedUsers = allowedUsers
+
+	if !c.Bot.Public && len(c.Bot.allowedUsers) == 0 {
+		return fmt.Errorf("bot.allowed_user_ids is required when bot.public is false")
+	}
 
 	if c.Captcha.Expiration <= 0 {
 		return fmt.Errorf("captcha.expiration must be greater than zero")

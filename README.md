@@ -45,6 +45,8 @@ go build -v -o toshiki-captcha-bot .
 bot:
   token: "123456789:telegram-bot-token"
   poll_timeout: 10s
+  public: true
+  allowed_user_ids: []
   topic_link: "https://t.me/c/1234567890/4/77"
 
 captcha:
@@ -57,6 +59,8 @@ captcha:
 ### 3.2: Bot config reference
 - `bot.token`: required Telegram bot token.
 - `bot.poll_timeout`: long-poll timeout for update polling.
+- `bot.public`: if `true`, any chat can use the bot. if `false`, only chats tied to configured allowed users are accepted.
+- `bot.allowed_user_ids`: user IDs allowed to operate private mode. required when `bot.public` is `false`.
 - `bot.topic_link`: optional Telegram topic URL reference. Leave empty to send messages to the chat root.
 
 ### 3.3: Captcha config reference
@@ -77,7 +81,7 @@ captcha:
 1. User joins group.
 2. Bot removes the raw join message.
 3. Bot sends CAPTCHA image + inline emoji keyboard.
-4. User selects matching emoji buttons.
+4. User selects matching emoji buttons in the same sequence as displayed in the image.
 5. Bot unrestricts user after all required answers are solved.
 
 ### 4.2: Failure flow
@@ -89,6 +93,10 @@ captcha:
 1. Unsolved challenges expire after `captcha.expiration`.
 2. Eviction handler bans the expired user.
 3. Challenge and notice messages are cleaned up.
+
+### 4.4: Utility command
+- `/ping` replies with `pong` and measured latency in milliseconds.
+- `/ping` is sender-restricted and only works for user IDs listed in `bot.allowed_user_ids`.
 
 ## 5: Development
 ### 5.1: Run tests
@@ -138,6 +146,7 @@ go run . -v
 - Verify bot is admin in the target group.
 - Verify privacy mode and permissions allow required updates/actions.
 - Confirm long polling is active and token is correct.
+- If `bot.public` is `false`, confirm at least one chat admin user ID is listed in `bot.allowed_user_ids`.
 
 ### 7.3: Topic routing is not applied
 - Ensure `bot.topic_link` points to the intended forum topic.

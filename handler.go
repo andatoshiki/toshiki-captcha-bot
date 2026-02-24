@@ -13,8 +13,81 @@ import (
 	tele "gopkg.in/telebot.v3"
 )
 
+func onPing(c tele.Context) error {
+	if !isSenderAllowed(c) {
+		logAccessDenied(c, "ping_sender_not_allowed")
+		return nil
+	}
+	if c.Chat() == nil {
+		log.Printf("warn: ping skipped reason=missing_chat_context")
+		return nil
+	}
+
+	chatID := c.Chat().ID
+	chatType := c.Chat().Type
+	userID := int64(0)
+	username := ""
+	messageID := 0
+	if c.Sender() != nil {
+		userID = c.Sender().ID
+		username = c.Sender().Username
+	}
+	if c.Message() != nil {
+		messageID = c.Message().ID
+	}
+	threadID := 0
+	if c.Chat().Type != tele.ChatPrivate {
+		if incoming := c.Message(); incoming != nil {
+			threadID = incoming.ThreadID
+		}
+	}
+	log.Printf(
+		"Ping received chat_id=%d chat_type=%s user_id=%d username=%q message_id=%d request_thread_id=%d configured_topic_thread_id=%d",
+		chatID,
+		chatType,
+		userID,
+		username,
+		messageID,
+		threadID,
+		cfg.Bot.TopicThreadID,
+	)
+
+	start := time.Now()
+	opts := buildSendOptionsWithTopic(tele.ModeDefault, nil, threadID)
+	log.Printf("Ping send attempt chat_id=%d user_id=%d thread_id=%d", chatID, userID, threadID)
+	msg, err := bot.Send(c.Chat(), "pong...", opts)
+	if err != nil && threadID != 0 && strings.Contains(err.Error(), "message thread not found") {
+		log.Printf(
+			"warn: ping send failed with thread not found chat_id=%d user_id=%d thread_id=%d err=%v fallback=chat_root",
+			chatID,
+			userID,
+			threadID,
+			err,
+		)
+		// Fallback to chat root when thread reference is stale or invalid.
+		msg, err = bot.Send(c.Chat(), "pong...", buildSendOptionsWithTopic(tele.ModeDefault, nil, 0))
+	}
+	if err != nil {
+		log.Printf("warn: failed to send ping response chat_id=%d err=%v", chatID, err)
+		return nil
+	}
+
+	latencyMS := time.Since(start).Milliseconds()
+	log.Printf("Ping sent chat_id=%d user_id=%d response_message_id=%d latency_ms=%d", chatID, userID, msg.ID, latencyMS)
+	if _, err := bot.Edit(msg, fmt.Sprintf("pong %d ms", latencyMS)); err != nil {
+		log.Printf("warn: failed to edit ping response chat_id=%d message_id=%d err=%v", chatID, msg.ID, err)
+		return nil
+	}
+	log.Printf("Ping completed chat_id=%d user_id=%d response_message_id=%d latency_ms=%d", chatID, userID, msg.ID, latencyMS)
+	return nil
+}
+
 func onJoin(c tele.Context) error {
 	if c.Chat().Type == tele.ChatPrivate {
+		return nil
+	}
+	if !isContextAuthorized(c) {
+		logAccessDenied(c, "join")
 		return nil
 	}
 
@@ -33,25 +106,33 @@ func onJoin(c tele.Context) error {
 		return nil
 	}
 
-	// Go's map iteration are not ordered, but also not guaranteed
-	// to be *always* randomized, so we give 1000 iteration trial
-	// then stop if the 4 selected answer already filled up
-	answerMoji := map[string]string{}
-	for i := 0; i < 1000; i++ {
-		// store 4 catpcha answer
-		if len(answerMoji) == 4 {
-			break
-		}
-		for key, val := range emojis {
-			answerMoji[key] = val
-			break
-		}
+	const answerCount = 4
+	const decoyCount = 6
+	const challengeCount = answerCount + decoyCount
+
+	emojiKeys := make([]string, 0, len(emojis))
+	for key := range emojis {
+		emojiKeys = append(emojiKeys, key)
 	}
+	if len(emojiKeys) < challengeCount {
+		log.Printf("error: captcha generation aborted chat_id=%d user_id=%d reason=insufficient_emoji_pool available=%d required=%d", c.Chat().ID, c.Sender().ID, len(emojiKeys), challengeCount)
+		return nil
+	}
+
+	rand.Shuffle(len(emojiKeys), func(i, j int) {
+		emojiKeys[i], emojiKeys[j] = emojiKeys[j], emojiKeys[i]
+	})
+
+	answerKeys := append([]string(nil), emojiKeys[:answerCount]...)
+	challengeKeys := append([]string(nil), emojiKeys[:challengeCount]...)
+	rand.Shuffle(len(challengeKeys), func(i, j int) {
+		challengeKeys[i], challengeKeys[j] = challengeKeys[j], challengeKeys[i]
+	})
 
 	// generate image
 	captchaGrids := make([]*gim.Grid, 0)
 	i := 0
-	for key := range answerMoji {
+	for _, key := range answerKeys {
 		x := 10
 		if i > 0 {
 			x = i * 100
@@ -76,34 +157,14 @@ func onJoin(c tele.Context) error {
 	var img bytes.Buffer
 	jpeg.Encode(&img, rgba, &jpeg.Options{Quality: 100})
 
-	// challenge moji
-	nonAnswerMoji := map[string]string{}
-	for key, val := range emojis {
-		if len(nonAnswerMoji) == 6 {
-			break
-		}
-		if _, ok := answerMoji[key]; !ok {
-			nonAnswerMoji[key] = val
-		}
-	}
-	// challengeMoji contain answer and non-answer (wrong) emoji
-	challengeMoji := map[string]string{}
-	for key, val := range nonAnswerMoji {
-		challengeMoji[key] = val
-	}
-	for key, val := range answerMoji {
-		challengeMoji[key] = val
-	}
-
 	// generate keyboard and send image
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
 	btn1 := make([]tele.Btn, 0)
 	btn2 := make([]tele.Btn, 0)
 	buttons := make([]tele.InlineButton, 0)
 
-	// Go's map iterator are no ordered (randomized?)
-	i = 0
-	for key, emoji := range challengeMoji {
+	for i, key := range challengeKeys {
+		emoji := emojis[key]
 		buttons = append(buttons, tele.InlineButton{Text: emoji, Unique: key})
 		if i < 5 {
 			btn1 = append(btn1, menu.Data(emoji, key))
@@ -113,10 +174,14 @@ func onJoin(c tele.Context) error {
 		i++
 	}
 
-	menu.Inline(
-		menu.Row(btn1...),
-		menu.Row(btn2...),
-	)
+	if len(btn2) > 0 {
+		menu.Inline(
+			menu.Row(btn1...),
+			menu.Row(btn2...),
+		)
+	} else {
+		menu.Inline(menu.Row(btn1...))
+	}
 
 	file := tele.FromReader(bytes.NewReader(img.Bytes()))
 	photo := &tele.Photo{File: file}
@@ -124,8 +189,8 @@ func onJoin(c tele.Context) error {
 
 	msg, err := sendWithConfiguredTopic(c.Chat(), photo, tele.ModeMarkdown, menu)
 	if err == nil {
-		captchaAnswer := make([]string, 0)
-		for key := range answerMoji {
+		captchaAnswer := make([]string, 0, len(answerKeys))
+		for _, key := range answerKeys {
 			captchaAnswer = append(captchaAnswer, strings.TrimSpace(key))
 		}
 		status := JoinStatus{
@@ -169,6 +234,10 @@ func handleAnswer(c tele.Context) error {
 	if c.Chat().Type == tele.ChatPrivate {
 		return nil
 	}
+	if !isContextAuthorized(c) {
+		logAccessDenied(c, "callback")
+		return nil
+	}
 
 	// kvID is combination of user id and chat id
 	kvID := fmt.Sprintf("%v-%v", c.Callback().Sender.ID, c.Chat().ID)
@@ -192,13 +261,21 @@ func handleAnswer(c tele.Context) error {
 		return nil
 	}
 
-	correct := false
-	if stringInSlice(answer, status.CaptchaAnswer) {
+	correct, expected := isNextCaptchaAnswer(status, answer)
+	if correct {
 		status.SolvedCaptcha++
-		correct = true
 		db.Update(kvID, status)
 	} else {
 		status.FailCaptcha++
+		log.Printf(
+			"Answer rejected (wrong sequence) chat_id=%d user_id=%d got=%q expected=%q solved=%d total=%d",
+			c.Chat().ID,
+			c.Callback().Sender.ID,
+			answer,
+			expected,
+			status.SolvedCaptcha,
+			len(status.CaptchaAnswer),
+		)
 	}
 
 	newButtons := make([]tele.InlineButton, 0)
@@ -220,7 +297,15 @@ func handleAnswer(c tele.Context) error {
 		Selective:      true,
 		InlineKeyboard: [][]tele.InlineButton{},
 	}
-	updateBtn.InlineKeyboard = append(updateBtn.InlineKeyboard, newButtons[0:5], newButtons[5:10])
+	if len(newButtons) == 0 {
+		log.Printf("warn: no captcha buttons available for update chat_id=%d user_id=%d", c.Chat().ID, c.Sender().ID)
+		return nil
+	}
+	if len(newButtons) <= 5 {
+		updateBtn.InlineKeyboard = append(updateBtn.InlineKeyboard, newButtons)
+	} else {
+		updateBtn.InlineKeyboard = append(updateBtn.InlineKeyboard, newButtons[:5], newButtons[5:])
+	}
 	if _, err := bot.Edit(c.Callback(), updateBtn); err != nil {
 		log.Printf("warn: failed to update captcha keyboard chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
 	}
@@ -273,6 +358,14 @@ func handleAnswer(c tele.Context) error {
 	}
 
 	return nil
+}
+
+func isNextCaptchaAnswer(status JoinStatus, answer string) (bool, string) {
+	if status.SolvedCaptcha < 0 || status.SolvedCaptcha >= len(status.CaptchaAnswer) {
+		return false, ""
+	}
+	expected := strings.TrimSpace(status.CaptchaAnswer[status.SolvedCaptcha])
+	return answer == expected, expected
 }
 
 func onEvicted(key string, value interface{}) {

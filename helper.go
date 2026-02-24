@@ -10,7 +10,7 @@ import (
 
 func genCaption(user *tele.User) string {
 	desc := fmt.Sprintf(
-		"Select all the emoji you see in the picture."+
+		"Select all the emoji you see in the picture in exact left-to-right order."+
 			"\n\n Max failure: %d mistake \n Duration: %s"+
 			"\n\n Please leave group immediately if you are not ready with the bot",
 		cfg.Captcha.MaxFailures,

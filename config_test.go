@@ -48,6 +48,27 @@ func TestRuntimeConfigValidate(t *testing.T) {
 			wantErr: "bot.topic_link",
 		},
 		{
+			name: "private mode requires allowed users",
+			mutate: func(cfg *runtimeConfig) {
+				cfg.Bot.Public = false
+			},
+			wantErr: "bot.allowed_user_ids is required when bot.public is false",
+		},
+		{
+			name: "invalid allowed user id",
+			mutate: func(cfg *runtimeConfig) {
+				cfg.Bot.AllowedUserIDs = []int64{1, 0}
+			},
+			wantErr: "bot.allowed_user_ids must contain positive integers",
+		},
+		{
+			name: "private mode with allowed users",
+			mutate: func(cfg *runtimeConfig) {
+				cfg.Bot.Public = false
+				cfg.Bot.AllowedUserIDs = []int64{1001}
+			},
+		},
+		{
 			name: "invalid expiration",
 			mutate: func(cfg *runtimeConfig) {
 				cfg.Captcha.Expiration = 0
@@ -131,6 +152,15 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.Bot.PollTimeout != want.Bot.PollTimeout {
 			t.Fatalf("Bot.PollTimeout = %v, want %v", cfg.Bot.PollTimeout, want.Bot.PollTimeout)
 		}
+		if cfg.Bot.Public != want.Bot.Public {
+			t.Fatalf("Bot.Public = %v, want %v", cfg.Bot.Public, want.Bot.Public)
+		}
+		if len(cfg.Bot.AllowedUserIDs) != 0 {
+			t.Fatalf("Bot.AllowedUserIDs length = %d, want 0", len(cfg.Bot.AllowedUserIDs))
+		}
+		if len(cfg.Bot.allowedUsers) != 0 {
+			t.Fatalf("Bot.allowedUsers length = %d, want 0", len(cfg.Bot.allowedUsers))
+		}
 		if cfg.Bot.TopicThreadID != 0 {
 			t.Fatalf("Bot.TopicThreadID = %d, want 0", cfg.Bot.TopicThreadID)
 		}
@@ -165,6 +195,35 @@ func TestLoadConfig(t *testing.T) {
 
 		if cfg.Bot.TopicThreadID != 4 {
 			t.Fatalf("Bot.TopicThreadID = %d, want 4", cfg.Bot.TopicThreadID)
+		}
+	})
+
+	t.Run("private mode with allowed users", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.yaml")
+		content := "bot:\n  token: test-token\n  public: false\n  allowed_user_ids: [1001, 1002]\n"
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write config file: %v", err)
+		}
+
+		cfg, err := loadConfig(path)
+		if err != nil {
+			t.Fatalf("loadConfig returned error: %v", err)
+		}
+
+		if cfg.Bot.Public {
+			t.Fatalf("Bot.Public = true, want false")
+		}
+		if len(cfg.Bot.allowedUsers) != 2 {
+			t.Fatalf("Bot.allowedUsers length = %d, want 2", len(cfg.Bot.allowedUsers))
+		}
+		if _, ok := cfg.Bot.allowedUsers[1001]; !ok {
+			t.Fatalf("Bot.allowedUsers missing user id 1001")
+		}
+		if _, ok := cfg.Bot.allowedUsers[1002]; !ok {
+			t.Fatalf("Bot.allowedUsers missing user id 1002")
 		}
 	})
 
