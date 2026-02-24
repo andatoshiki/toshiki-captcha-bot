@@ -23,7 +23,7 @@ func helpText() string {
 		"commands:",
 		"/help show this help message (public)",
 		"/version show build and runtime version details (public)",
-		"/ping check bot reachability and latency in ms (admin only)",
+		"/ping check bot reachability and latency in ms (configured ids only)",
 		"/testcaptcha manually trigger a captcha challenge (admin only)",
 		"",
 		"credits:",
@@ -91,7 +91,6 @@ func adminBotCommands() []tele.Command {
 	return []tele.Command{
 		{Text: "help", Description: "show this help message"},
 		{Text: "version", Description: "show build and runtime version details"},
-		{Text: "ping", Description: "check bot reachability and latency in ms"},
 		{Text: "testcaptcha", Description: "manually trigger a captcha challenge"},
 	}
 }

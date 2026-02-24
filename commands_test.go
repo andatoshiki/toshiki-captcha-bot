@@ -17,6 +17,7 @@ func TestHelpText(t *testing.T) {
 		"/version",
 		"/ping",
 		"/testcaptcha",
+		"configured ids only",
 		projectURL,
 		authorInfo,
 	}
@@ -47,12 +48,12 @@ func TestAdminBotCommands(t *testing.T) {
 	t.Parallel()
 
 	cmds := adminBotCommands()
-	if len(cmds) != 4 {
-		t.Fatalf("admin command count = %d, want 4", len(cmds))
+	if len(cmds) != 3 {
+		t.Fatalf("admin command count = %d, want 3", len(cmds))
 	}
 
-	got := []string{cmds[0].Text, cmds[1].Text, cmds[2].Text, cmds[3].Text}
-	want := []string{"help", "version", "ping", "testcaptcha"}
+	got := []string{cmds[0].Text, cmds[1].Text, cmds[2].Text}
+	want := []string{"help", "version", "testcaptcha"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("admin commands = %v, want %v", got, want)
 	}

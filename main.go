@@ -71,7 +71,7 @@ func main() {
 	b.Handle("/help", onHelp)
 	b.Handle("/version", onVersion)
 	b.Handle("/ping", onPing)
-	b.Handle("/testcaptcha", onJoin)
+	b.Handle("/testcaptcha", onTestCaptcha)
 	b.Handle(tele.OnAddedToGroup, onAddedToGroup)
 	b.Handle(tele.OnUserJoined, onJoin)
 	b.Handle(tele.OnCallback, handleAnswer)
