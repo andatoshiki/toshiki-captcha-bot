@@ -52,3 +52,47 @@ func TestBuildSendOptionsWithTopic(t *testing.T) {
 		})
 	}
 }
+
+func TestTopicThreadIDForChat(t *testing.T) {
+	t.Parallel()
+
+	const configuredThreadID = 42
+
+	tests := []struct {
+		name    string
+		chat    *tele.Chat
+		wantID  int
+	}{
+		{
+			name:   "nil chat falls back to root",
+			chat:   nil,
+			wantID: 0,
+		},
+		{
+			name:   "private chat ignores configured topic",
+			chat:   &tele.Chat{Type: tele.ChatPrivate},
+			wantID: 0,
+		},
+		{
+			name:   "group chat uses configured topic",
+			chat:   &tele.Chat{Type: tele.ChatGroup},
+			wantID: configuredThreadID,
+		},
+		{
+			name:   "supergroup chat uses configured topic",
+			chat:   &tele.Chat{Type: tele.ChatSuperGroup},
+			wantID: configuredThreadID,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := topicThreadIDForChat(tt.chat, configuredThreadID); got != tt.wantID {
+				t.Fatalf("topicThreadIDForChat() = %d, want %d", got, tt.wantID)
+			}
+		})
+	}
+}

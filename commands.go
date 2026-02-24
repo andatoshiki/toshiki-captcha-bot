@@ -36,7 +36,11 @@ func helpText() string {
 func onHelp(c tele.Context) error {
 	chatID, userID := commandContextIDs(c)
 	log.Printf("Help requested chat_id=%d user_id=%d", chatID, userID)
-	if err := c.Send(helpText()); err != nil {
+	if c == nil || c.Chat() == nil {
+		log.Printf("warn: help skipped reason=missing_chat_context user_id=%d", userID)
+		return nil
+	}
+	if _, err := sendWithConfiguredTopic(c.Chat(), helpText(), tele.ModeDefault, nil); err != nil {
 		log.Printf("warn: failed to send help response chat_id=%d user_id=%d err=%v", chatID, userID, err)
 	}
 	return nil
@@ -45,7 +49,11 @@ func onHelp(c tele.Context) error {
 func onVersion(c tele.Context) error {
 	chatID, userID := commandContextIDs(c)
 	log.Printf("Version requested chat_id=%d user_id=%d", chatID, userID)
-	if err := c.Send(versionTextMarkdown(), tele.ModeMarkdown); err != nil {
+	if c == nil || c.Chat() == nil {
+		log.Printf("warn: version skipped reason=missing_chat_context user_id=%d", userID)
+		return nil
+	}
+	if _, err := sendWithConfiguredTopic(c.Chat(), versionTextMarkdown(), tele.ModeMarkdown, nil); err != nil {
 		log.Printf("warn: failed to send version response chat_id=%d user_id=%d err=%v", chatID, userID, err)
 	}
 	return nil
