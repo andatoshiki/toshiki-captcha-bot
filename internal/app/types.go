@@ -1,4 +1,4 @@
-package main
+package app
 
 import tele "gopkg.in/telebot.v3"
 

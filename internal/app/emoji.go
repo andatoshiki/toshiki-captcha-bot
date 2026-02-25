@@ -1,4 +1,4 @@
-package main
+package app
 
 var emojis = map[string]string{
 	"u1f35c": "🍜",
