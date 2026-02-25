@@ -184,3 +184,127 @@ func TestRenderCaptchaImageWithMissingAsset(t *testing.T) {
 		t.Fatalf("renderCaptchaImage error = %q, want merge error", err.Error())
 	}
 }
+
+func TestBuildCaptchaChallenge(t *testing.T) {
+	t.Parallel()
+
+	challenge, err := buildCaptchaChallenge(4, 6)
+	if err != nil {
+		t.Fatalf("buildCaptchaChallenge returned error: %v", err)
+	}
+
+	if len(challenge.AnswerKeys) != 4 {
+		t.Fatalf("answer key count = %d, want 4", len(challenge.AnswerKeys))
+	}
+	if len(challenge.Buttons) != 10 {
+		t.Fatalf("button count = %d, want 10", len(challenge.Buttons))
+	}
+	if challenge.Markup == nil {
+		t.Fatalf("markup is nil")
+	}
+	if len(challenge.Markup.InlineKeyboard) == 0 {
+		t.Fatalf("markup has no inline keyboard rows")
+	}
+	if len(challenge.ImageBytes) == 0 {
+		t.Fatalf("image bytes are empty")
+	}
+
+	buttonsByKey := make(map[string]struct{}, len(challenge.Buttons))
+	for _, button := range challenge.Buttons {
+		buttonsByKey[button.Unique] = struct{}{}
+	}
+	for _, answerKey := range challenge.AnswerKeys {
+		if _, ok := buttonsByKey[answerKey]; !ok {
+			t.Fatalf("answer key %q is not present in challenge buttons", answerKey)
+		}
+	}
+}
+
+func TestApplyCaptchaChallenge(t *testing.T) {
+	t.Parallel()
+
+	status := captcha.JoinStatus{
+		SolvedCaptcha: 3,
+		FailCaptcha:   2,
+	}
+	challenge := captchaChallenge{
+		AnswerKeys: []string{"u1", "u2", "u3", "u4"},
+		Buttons: []tele.InlineButton{
+			{Text: "A", Unique: "u1"},
+			{Text: "B", Unique: "u2"},
+		},
+	}
+	message := tele.Message{ID: 77}
+
+	applyCaptchaChallenge(&status, challenge, message)
+
+	if status.SolvedCaptcha != 0 {
+		t.Fatalf("solved captcha = %d, want 0", status.SolvedCaptcha)
+	}
+	if status.FailCaptcha != 2 {
+		t.Fatalf("fail captcha = %d, want 2", status.FailCaptcha)
+	}
+	if status.CaptchaMessage.ID != 77 {
+		t.Fatalf("captcha message id = %d, want 77", status.CaptchaMessage.ID)
+	}
+	if len(status.CaptchaAnswer) != 4 {
+		t.Fatalf("captcha answer count = %d, want 4", len(status.CaptchaAnswer))
+	}
+	if len(status.Buttons) != 2 {
+		t.Fatalf("button count = %d, want 2", len(status.Buttons))
+	}
+
+	challenge.Buttons[0].Text = "mutated"
+	if status.Buttons[0].Text == "mutated" {
+		t.Fatalf("status buttons should be copied, got shared underlying data")
+	}
+}
+
+func TestCaptchaMarkupFromButtons(t *testing.T) {
+	t.Parallel()
+
+	t.Run("single row when up to five buttons", func(t *testing.T) {
+		t.Parallel()
+
+		buttons := []tele.InlineButton{
+			{Unique: "u1"},
+			{Unique: "u2"},
+			{Unique: "u3"},
+			{Unique: "u4"},
+			{Unique: "u5"},
+		}
+		markup := captchaMarkupFromButtons(buttons)
+
+		if len(markup.InlineKeyboard) != 1 {
+			t.Fatalf("rows = %d, want 1", len(markup.InlineKeyboard))
+		}
+		if len(markup.InlineKeyboard[0]) != 5 {
+			t.Fatalf("row size = %d, want 5", len(markup.InlineKeyboard[0]))
+		}
+	})
+
+	t.Run("two rows when more than five buttons", func(t *testing.T) {
+		t.Parallel()
+
+		buttons := []tele.InlineButton{
+			{Unique: "u1"},
+			{Unique: "u2"},
+			{Unique: "u3"},
+			{Unique: "u4"},
+			{Unique: "u5"},
+			{Unique: "u6"},
+			{Unique: "u7"},
+		}
+		markup := captchaMarkupFromButtons(buttons)
+
+		if len(markup.InlineKeyboard) != 2 {
+			t.Fatalf("rows = %d, want 2", len(markup.InlineKeyboard))
+		}
+		if len(markup.InlineKeyboard[0]) != 5 {
+			t.Fatalf("row0 size = %d, want 5", len(markup.InlineKeyboard[0]))
+		}
+		if len(markup.InlineKeyboard[1]) != 2 {
+			t.Fatalf("row1 size = %d, want 2", len(markup.InlineKeyboard[1]))
+		}
+	})
+}
