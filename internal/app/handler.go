@@ -280,7 +280,7 @@ func issueCaptchaChallenge(c tele.Context, targetUser *tele.User, deleteTriggerM
 		return nil
 	}
 
-	msg, err := sendCaptchaChallenge(c.Chat(), targetUser, challenge.ImageBytes, genCaption(targetUser), challenge.Markup)
+	msg, err := sendCaptchaChallenge(c.Chat(), challenge.ImageBytes, genCaption(targetUser), challenge.Markup)
 	if err != nil {
 		if errors.Is(err, errCaptchaSendTimeout) {
 			// Timeout is delivery-uncertain: keep challenge state for callback matching.
@@ -522,7 +522,7 @@ func sendCaptchaTimeoutNotice(status captcha.JoinStatus, targetChat *tele.Chat) 
 	}
 }
 
-func sendCaptchaChallenge(chat *tele.Chat, user *tele.User, imageBytes []byte, caption string, markup *tele.ReplyMarkup) (*tele.Message, error) {
+func sendCaptchaChallenge(chat *tele.Chat, imageBytes []byte, caption string, markup *tele.ReplyMarkup) (*tele.Message, error) {
 	file := tele.FromReader(bytes.NewReader(imageBytes))
 	photo := &tele.Photo{File: file}
 	photo.Caption = caption
