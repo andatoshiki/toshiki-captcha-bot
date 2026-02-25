@@ -1,4 +1,4 @@
-package app
+package commandscope
 
 import (
 	"path/filepath"
@@ -38,9 +38,9 @@ func TestCommandScopeStatePathForConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := commandScopeStatePathForConfig(tt.input)
+			got := PathForConfig(tt.input)
 			if got != tt.expect {
-				t.Fatalf("commandScopeStatePathForConfig() = %q, want %q", got, tt.expect)
+				t.Fatalf("PathForConfig() = %q, want %q", got, tt.expect)
 			}
 		})
 	}
@@ -60,7 +60,7 @@ func TestDiffCommandScopes_RemovedAdminScopesBecomeStale(t *testing.T) {
 		{Type: tele.CommandScopeChatMember, ChatID: -1001, UserID: 1001},
 	}
 
-	got := diffCommandScopes(previous, desired)
+	got := DiffScopes(previous, desired)
 	want := []tele.CommandScope{
 		{Type: tele.CommandScopeChat, ChatID: 2002},
 		{Type: tele.CommandScopeChatMember, ChatID: -1001, UserID: 2002},
@@ -84,13 +84,13 @@ func TestCommandScopeStateRoundTrip(t *testing.T) {
 		{Type: tele.CommandScopeChatMember, ChatID: -1001, UserID: 1001},
 	}
 
-	if err := saveCommandScopeState(path, input); err != nil {
-		t.Fatalf("saveCommandScopeState returned error: %v", err)
+	if err := Save(path, input); err != nil {
+		t.Fatalf("Save returned error: %v", err)
 	}
 
-	got, err := loadCommandScopeState(path)
+	got, err := Load(path)
 	if err != nil {
-		t.Fatalf("loadCommandScopeState returned error: %v", err)
+		t.Fatalf("Load returned error: %v", err)
 	}
 
 	want := []tele.CommandScope{
@@ -100,6 +100,6 @@ func TestCommandScopeStateRoundTrip(t *testing.T) {
 	}
 
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("loadCommandScopeState() = %#v, want %#v", got, want)
+		t.Fatalf("Load() = %#v, want %#v", got, want)
 	}
 }

@@ -7,6 +7,9 @@ import (
 
 	"github.com/codenoid/minikv"
 	tele "gopkg.in/telebot.v3"
+	"toshiki-captcha-bot/internal/cli"
+	"toshiki-captcha-bot/internal/commandscope"
+	"toshiki-captcha-bot/internal/version"
 )
 
 var (
@@ -15,7 +18,7 @@ var (
 	cfg = defaultRuntimeConfig()
 	db  *minikv.KV
 
-	commandScopeStatePath = commandScopeStatePathForConfig(defaultConfigPath)
+	commandScopeStatePath = commandscope.PathForConfig(defaultConfigPath)
 )
 
 // Main bootstraps and runs the Telegram bot process.
@@ -23,24 +26,24 @@ func Main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("[captcha-bot] ")
 
-	opts, err := parseCLIArgs(os.Args[1:])
+	opts, err := cli.ParseArgs(os.Args[1:], defaultConfigPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n\n%s", err, usageText())
+		fmt.Fprintf(os.Stderr, "Error: %v\n\n%s", err, cli.UsageText(defaultConfigPath))
 		os.Exit(2)
 	}
 
-	if opts.showHelp {
-		fmt.Print(usageText())
+	if opts.ShowHelp {
+		fmt.Print(cli.UsageText(defaultConfigPath))
 		return
 	}
-	if opts.showVersion {
-		fmt.Print(versionText())
+	if opts.ShowVersion {
+		fmt.Print(version.Text())
 		return
 	}
 
-	commandScopeStatePath = commandScopeStatePathForConfig(opts.configPath)
+	commandScopeStatePath = commandscope.PathForConfig(opts.ConfigPath)
 
-	loadedCfg, err := loadConfig(opts.configPath)
+	loadedCfg, err := loadConfig(opts.ConfigPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -48,7 +51,7 @@ func Main() {
 	db = minikv.New(cfg.Captcha.Expiration, cfg.Captcha.CleanupInterval)
 	log.Printf(
 		"Loaded config path=%q poll_timeout=%s public_mode=%t admin_user_ids=%d groups=%d topic_mappings=%d captcha_expiration=%s max_failures=%d",
-		opts.configPath,
+		opts.ConfigPath,
 		cfg.Bot.PollTimeout,
 		cfg.isPublicMode(),
 		len(cfg.Bot.adminUsers),

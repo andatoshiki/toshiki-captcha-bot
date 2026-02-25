@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	tele "gopkg.in/telebot.v3"
+	"toshiki-captcha-bot/internal/commandscope"
+	"toshiki-captcha-bot/internal/version"
 )
 
 const (
@@ -75,7 +77,7 @@ func onVersion(c tele.Context) error {
 		}
 		return nil
 	}
-	if _, err := sendWithConfiguredTopic(c.Chat(), versionTextMarkdown(), tele.ModeMarkdown, nil); err != nil {
+	if _, err := sendWithConfiguredTopic(c.Chat(), version.MarkdownText(), tele.ModeMarkdown, nil); err != nil {
 		log.Printf("warn: failed to send version response chat_id=%d user_id=%d err=%v", chatID, userID, err)
 	}
 	return nil
@@ -133,12 +135,12 @@ func reconcileAdminCommandScopes(b *tele.Bot, adminCommands []tele.Command, desi
 		return
 	}
 
-	previousScopes, err := loadCommandScopeState(commandScopeStatePath)
+	previousScopes, err := commandscope.Load(commandScopeStatePath)
 	if err != nil {
 		log.Printf("warn: failed to load command scope state path=%q err=%v", commandScopeStatePath, err)
 	}
 
-	staleScopes := diffCommandScopes(previousScopes, desiredScopes)
+	staleScopes := commandscope.DiffScopes(previousScopes, desiredScopes)
 	failedDeletes := make([]tele.CommandScope, 0)
 	for _, scope := range staleScopes {
 		if err := b.DeleteCommands(scope); err != nil {
@@ -171,8 +173,8 @@ func reconcileAdminCommandScopes(b *tele.Bot, adminCommands []tele.Command, desi
 	}
 	log.Printf("Bot commands updated admin_scopes=%d success=%d stale_deleted=%d", len(desiredScopes), success, len(staleScopes)-len(failedDeletes))
 
-	nextState := mergeCommandScopes(desiredScopes, failedDeletes)
-	if err := saveCommandScopeState(commandScopeStatePath, nextState); err != nil {
+	nextState := commandscope.MergeScopes(desiredScopes, failedDeletes)
+	if err := commandscope.Save(commandScopeStatePath, nextState); err != nil {
 		log.Printf("warn: failed to save command scope state path=%q err=%v", commandScopeStatePath, err)
 		return
 	}

@@ -1,6 +1,9 @@
 package main
 
-import "toshiki-captcha-bot/internal/app"
+import (
+	"toshiki-captcha-bot/internal/app"
+	buildinfo "toshiki-captcha-bot/internal/version"
+)
 
 var (
 	// Version is the app version. Override via -ldflags "-X main.Version=x.y.z".
@@ -12,9 +15,9 @@ var (
 )
 
 func init() {
-	app.Version = Version
-	app.Commit = Commit
-	app.BuildTime = BuildTime
+	buildinfo.Version = Version
+	buildinfo.Commit = Commit
+	buildinfo.BuildTime = BuildTime
 }
 
 func main() {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tele "gopkg.in/telebot.v3"
+	"toshiki-captcha-bot/internal/captcha"
 )
 
 func TestIsNextCaptchaAnswer(t *testing.T) {
@@ -12,14 +13,14 @@ func TestIsNextCaptchaAnswer(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		status       JoinStatus
+		status       captcha.JoinStatus
 		answer       string
 		wantOK       bool
 		wantExpected string
 	}{
 		{
 			name: "first step correct",
-			status: JoinStatus{
+			status: captcha.JoinStatus{
 				CaptchaAnswer: []string{"u1", "u2", "u3", "u4"},
 				SolvedCaptcha: 0,
 			},
@@ -29,7 +30,7 @@ func TestIsNextCaptchaAnswer(t *testing.T) {
 		},
 		{
 			name: "first step wrong",
-			status: JoinStatus{
+			status: captcha.JoinStatus{
 				CaptchaAnswer: []string{"u1", "u2", "u3", "u4"},
 				SolvedCaptcha: 0,
 			},
@@ -39,7 +40,7 @@ func TestIsNextCaptchaAnswer(t *testing.T) {
 		},
 		{
 			name: "duplicate previous tap is wrong",
-			status: JoinStatus{
+			status: captcha.JoinStatus{
 				CaptchaAnswer: []string{"u1", "u2", "u3", "u4"},
 				SolvedCaptcha: 1,
 			},
@@ -49,7 +50,7 @@ func TestIsNextCaptchaAnswer(t *testing.T) {
 		},
 		{
 			name: "next step correct",
-			status: JoinStatus{
+			status: captcha.JoinStatus{
 				CaptchaAnswer: []string{"u1", "u2", "u3", "u4"},
 				SolvedCaptcha: 2,
 			},
@@ -59,7 +60,7 @@ func TestIsNextCaptchaAnswer(t *testing.T) {
 		},
 		{
 			name: "out of range solved index",
-			status: JoinStatus{
+			status: captcha.JoinStatus{
 				CaptchaAnswer: []string{"u1", "u2", "u3", "u4"},
 				SolvedCaptcha: 4,
 			},
@@ -69,7 +70,7 @@ func TestIsNextCaptchaAnswer(t *testing.T) {
 		},
 		{
 			name: "empty answers",
-			status: JoinStatus{
+			status: captcha.JoinStatus{
 				CaptchaAnswer: []string{},
 				SolvedCaptcha: 0,
 			},

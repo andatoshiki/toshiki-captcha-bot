@@ -1,4 +1,4 @@
-package app
+package commandscope
 
 import (
 	"encoding/json"
@@ -12,12 +12,13 @@ import (
 )
 
 const commandScopeStateFileSuffix = ".command-scopes.json"
+const defaultConfigPath = "config.yaml"
 
 type commandScopeState struct {
 	Scopes []tele.CommandScope `json:"scopes"`
 }
 
-func commandScopeStatePathForConfig(configPath string) string {
+func PathForConfig(configPath string) string {
 	path := strings.TrimSpace(configPath)
 	if path == "" {
 		path = defaultConfigPath
@@ -44,7 +45,7 @@ func commandScopeKey(scope tele.CommandScope) string {
 	return fmt.Sprintf("%s:%d:%d", normalized.Type, normalized.ChatID, normalized.UserID)
 }
 
-func uniqueSortedCommandScopes(scopes []tele.CommandScope) []tele.CommandScope {
+func UniqueSortedScopes(scopes []tele.CommandScope) []tele.CommandScope {
 	if len(scopes) == 0 {
 		return nil
 	}
@@ -74,15 +75,15 @@ func uniqueSortedCommandScopes(scopes []tele.CommandScope) []tele.CommandScope {
 	return uniq
 }
 
-func mergeCommandScopes(scopeSets ...[]tele.CommandScope) []tele.CommandScope {
+func MergeScopes(scopeSets ...[]tele.CommandScope) []tele.CommandScope {
 	merged := make([]tele.CommandScope, 0)
 	for _, set := range scopeSets {
 		merged = append(merged, set...)
 	}
-	return uniqueSortedCommandScopes(merged)
+	return UniqueSortedScopes(merged)
 }
 
-func diffCommandScopes(current, desired []tele.CommandScope) []tele.CommandScope {
+func DiffScopes(current, desired []tele.CommandScope) []tele.CommandScope {
 	if len(current) == 0 {
 		return nil
 	}
@@ -101,10 +102,10 @@ func diffCommandScopes(current, desired []tele.CommandScope) []tele.CommandScope
 		stale = append(stale, scope)
 	}
 
-	return uniqueSortedCommandScopes(stale)
+	return UniqueSortedScopes(stale)
 }
 
-func loadCommandScopeState(path string) ([]tele.CommandScope, error) {
+func Load(path string) ([]tele.CommandScope, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -118,12 +119,12 @@ func loadCommandScopeState(path string) ([]tele.CommandScope, error) {
 		return nil, fmt.Errorf("decode command scope state file %q: %w", path, err)
 	}
 
-	return uniqueSortedCommandScopes(state.Scopes), nil
+	return UniqueSortedScopes(state.Scopes), nil
 }
 
-func saveCommandScopeState(path string, scopes []tele.CommandScope) error {
+func Save(path string, scopes []tele.CommandScope) error {
 	state := commandScopeState{
-		Scopes: uniqueSortedCommandScopes(scopes),
+		Scopes: UniqueSortedScopes(scopes),
 	}
 	raw, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {

@@ -1,6 +1,6 @@
-package app
+package captcha
 
-var emojis = map[string]string{
+var Emojis = map[string]string{
 	"u1f35c": "🍜",
 	"u1f958": "🥘",
 	"u1f9c6": "🧆",
