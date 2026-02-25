@@ -97,9 +97,8 @@ func syncBotCommands(b *tele.Bot) {
 		log.Printf("Bot commands updated scope=default count=%d", len(public))
 	}
 
-	adminCommands := adminBotCommands()
 	desiredScopes := desiredAdminCommandScopes(b, cfg)
-	reconcileAdminCommandScopes(b, adminCommands, desiredScopes)
+	reconcileAdminCommandScopes(b, desiredScopes)
 	if len(desiredScopes) == 0 {
 		log.Printf("Bot commands admin scopes skipped reason=no_admin_user_ids")
 	}
@@ -131,7 +130,7 @@ func desiredAdminCommandScopes(b *tele.Bot, config settings.RuntimeConfig) []tel
 	return buildAdminCommandScopes(adminIDs, groupChatIDs)
 }
 
-func reconcileAdminCommandScopes(b *tele.Bot, adminCommands []tele.Command, desiredScopes []tele.CommandScope) {
+func reconcileAdminCommandScopes(b *tele.Bot, desiredScopes []tele.CommandScope) {
 	if b == nil {
 		return
 	}
@@ -160,7 +159,8 @@ func reconcileAdminCommandScopes(b *tele.Bot, adminCommands []tele.Command, desi
 
 	success := 0
 	for _, scope := range desiredScopes {
-		if err := b.SetCommands(adminCommands, scope); err != nil {
+		scopeCommands := scopedAdminCommands(scope)
+		if err := b.SetCommands(scopeCommands, scope); err != nil {
 			log.Printf(
 				"warn: failed to register admin bot commands scope=%s chat_id=%d user_id=%d err=%v",
 				scope.Type,
@@ -189,13 +189,28 @@ func publicBotCommands() []tele.Command {
 	}
 }
 
-func adminBotCommands() []tele.Command {
+func adminPrivateBotCommands() []tele.Command {
+	return []tele.Command{
+		{Text: "help", Description: "show this help message"},
+		{Text: "version", Description: "show build and runtime version details"},
+		{Text: "ping", Description: "check bot reachability and latency in ms"},
+	}
+}
+
+func adminGroupBotCommands() []tele.Command {
 	return []tele.Command{
 		{Text: "help", Description: "show this help message"},
 		{Text: "version", Description: "show build and runtime version details"},
 		{Text: "ping", Description: "check bot reachability and latency in ms"},
 		{Text: "testcaptcha", Description: "manually trigger a captcha challenge"},
 	}
+}
+
+func scopedAdminCommands(scope tele.CommandScope) []tele.Command {
+	if scope.Type == tele.CommandScopeChatMember {
+		return adminGroupBotCommands()
+	}
+	return adminPrivateBotCommands()
 }
 
 func sortedAdminUserIDs(config settings.RuntimeConfig) []int64 {

@@ -47,18 +47,53 @@ func TestPublicBotCommands(t *testing.T) {
 	}
 }
 
-func TestAdminBotCommands(t *testing.T) {
+func TestAdminPrivateBotCommands(t *testing.T) {
 	t.Parallel()
 
-	cmds := adminBotCommands()
+	cmds := adminPrivateBotCommands()
+	if len(cmds) != 3 {
+		t.Fatalf("private admin command count = %d, want 3", len(cmds))
+	}
+
+	got := []string{cmds[0].Text, cmds[1].Text, cmds[2].Text}
+	want := []string{"help", "version", "ping"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("private admin commands = %v, want %v", got, want)
+	}
+}
+
+func TestAdminGroupBotCommands(t *testing.T) {
+	t.Parallel()
+
+	cmds := adminGroupBotCommands()
 	if len(cmds) != 4 {
-		t.Fatalf("admin command count = %d, want 4", len(cmds))
+		t.Fatalf("group admin command count = %d, want 4", len(cmds))
 	}
 
 	got := []string{cmds[0].Text, cmds[1].Text, cmds[2].Text, cmds[3].Text}
 	want := []string{"help", "version", "ping", "testcaptcha"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("admin commands = %v, want %v", got, want)
+		t.Fatalf("group admin commands = %v, want %v", got, want)
+	}
+}
+
+func TestScopedAdminCommands(t *testing.T) {
+	t.Parallel()
+
+	privateScope := tele.CommandScope{Type: tele.CommandScopeChat, ChatID: 1001}
+	groupScope := tele.CommandScope{Type: tele.CommandScopeChatMember, ChatID: -1001, UserID: 1001}
+
+	private := scopedAdminCommands(privateScope)
+	group := scopedAdminCommands(groupScope)
+
+	privateTexts := []string{private[0].Text, private[1].Text, private[2].Text}
+	groupTexts := []string{group[0].Text, group[1].Text, group[2].Text, group[3].Text}
+
+	if !reflect.DeepEqual(privateTexts, []string{"help", "version", "ping"}) {
+		t.Fatalf("private scope commands = %v, want %v", privateTexts, []string{"help", "version", "ping"})
+	}
+	if !reflect.DeepEqual(groupTexts, []string{"help", "version", "ping", "testcaptcha"}) {
+		t.Fatalf("group scope commands = %v, want %v", groupTexts, []string{"help", "version", "ping", "testcaptcha"})
 	}
 }
 
