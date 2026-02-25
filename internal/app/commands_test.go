@@ -108,6 +108,9 @@ func TestSortedAdminUserIDs(t *testing.T) {
 	config := settings.DefaultRuntimeConfig()
 	config.Bot.Token = "test-token"
 	config.Bot.AdminUserIDs = []int64{4002, 1001, 3003}
+	config.Groups = []settings.GroupTopicConfig{
+		{ID: "@allowedgroup"},
+	}
 	if err := config.Validate(); err != nil {
 		t.Fatalf("Validate returned error: %v", err)
 	}

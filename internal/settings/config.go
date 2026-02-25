@@ -102,6 +102,10 @@ func (c *RuntimeConfig) Validate() error {
 		c.groupAllow = make(map[string]struct{})
 		c.groupTopics = make(map[string]int)
 	} else {
+		if len(c.Groups) == 0 {
+			return fmt.Errorf("groups must contain at least one public group when bot.admin_user_ids is set")
+		}
+
 		groupAllow := make(map[string]struct{}, len(c.Groups))
 		groupTopics := make(map[string]int, len(c.Groups))
 		seen := make(map[string]struct{}, len(c.Groups))

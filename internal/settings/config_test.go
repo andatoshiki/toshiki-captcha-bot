@@ -81,6 +81,14 @@ func TestRuntimeConfigValidate(t *testing.T) {
 			wantErr: "groups[0].topic",
 		},
 		{
+			name: "private mode requires non empty groups",
+			mutate: func(cfg *RuntimeConfig) {
+				cfg.Bot.AdminUserIDs = []int64{1001}
+				cfg.Groups = nil
+			},
+			wantErr: "groups must contain at least one public group when bot.admin_user_ids is set",
+		},
+		{
 			name: "public mode discards groups config",
 			mutate: func(cfg *RuntimeConfig) {
 				cfg.Groups = []GroupTopicConfig{
@@ -345,6 +353,16 @@ func TestLoadConfig(t *testing.T) {
 				"",
 			}, "\n"),
 			wantErr: "groups[0].id is invalid",
+		},
+		{
+			name: "missing groups in private mode",
+			content: strings.Join([]string{
+				"bot:",
+				"  token: test",
+				"  admin_user_ids: [1001]",
+				"",
+			}, "\n"),
+			wantErr: "groups must contain at least one public group when bot.admin_user_ids is set",
 		},
 	}
 
