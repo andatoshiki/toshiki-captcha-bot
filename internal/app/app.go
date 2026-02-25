@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 
 	"github.com/codenoid/minikv"
@@ -51,9 +52,10 @@ func Main() {
 	cfg = loadedCfg
 	db = minikv.New(cfg.Captcha.Expiration, cfg.Captcha.CleanupInterval)
 	log.Printf(
-		"Loaded config path=%q poll_timeout=%s public_mode=%t admin_user_ids=%d groups=%d topic_mappings=%d captcha_expiration=%s max_failures=%d",
+		"Loaded config path=%q poll_timeout=%s request_timeout=%s public_mode=%t admin_user_ids=%d groups=%d topic_mappings=%d captcha_expiration=%s max_failures=%d",
 		opts.ConfigPath,
 		cfg.Bot.PollTimeout,
+		cfg.Bot.RequestTimeout,
 		cfg.IsPublicMode(),
 		cfg.AdminUserCount(),
 		cfg.GroupCount(),
@@ -68,6 +70,7 @@ func Main() {
 	b, err := tele.NewBot(tele.Settings{
 		Token:  cfg.Bot.Token,
 		Poller: &tele.LongPoller{Timeout: cfg.Bot.PollTimeout},
+		Client: &http.Client{Timeout: cfg.Bot.RequestTimeout},
 	})
 	if err != nil {
 		log.Fatal(err)
