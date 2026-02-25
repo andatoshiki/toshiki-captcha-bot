@@ -23,10 +23,11 @@ type RuntimeConfig struct {
 }
 
 type BotConfig struct {
-	Token        string             `yaml:"token"`
-	PollTimeout  time.Duration      `yaml:"poll_timeout"`
-	AdminUserIDs []int64            `yaml:"admin_user_ids"`
-	adminUsers   map[int64]struct{} `yaml:"-"`
+	Token          string             `yaml:"token"`
+	PollTimeout    time.Duration      `yaml:"poll_timeout"`
+	RequestTimeout time.Duration      `yaml:"request_timeout"`
+	AdminUserIDs   []int64            `yaml:"admin_user_ids"`
+	adminUsers     map[int64]struct{} `yaml:"-"`
 }
 
 type GroupTopicConfig struct {
@@ -44,7 +45,8 @@ type CaptchaConfig struct {
 func DefaultRuntimeConfig() RuntimeConfig {
 	return RuntimeConfig{
 		Bot: BotConfig{
-			PollTimeout: 10 * time.Second,
+			PollTimeout:    10 * time.Second,
+			RequestTimeout: 30 * time.Second,
 		},
 		Groups: make([]GroupTopicConfig, 0),
 		Captcha: CaptchaConfig{
@@ -84,6 +86,9 @@ func (c *RuntimeConfig) Validate() error {
 	}
 	if c.Bot.PollTimeout <= 0 {
 		return fmt.Errorf("bot.poll_timeout must be greater than zero")
+	}
+	if c.Bot.RequestTimeout <= 0 {
+		return fmt.Errorf("bot.request_timeout must be greater than zero")
 	}
 
 	adminUsers := make(map[int64]struct{}, len(c.Bot.AdminUserIDs))
