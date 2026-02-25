@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	tele "gopkg.in/telebot.v3"
@@ -170,4 +171,16 @@ func TestRespondAdminOnlyCommandDenied(t *testing.T) {
 			t.Fatalf("sendCount = %d, want 1", ctx.sendCount)
 		}
 	})
+}
+
+func TestRenderCaptchaImageWithMissingAsset(t *testing.T) {
+	t.Parallel()
+
+	_, err := renderCaptchaImage([]string{"does_not_exist"})
+	if err == nil {
+		t.Fatalf("renderCaptchaImage expected error for missing asset key")
+	}
+	if !strings.Contains(err.Error(), "merge captcha layers") {
+		t.Fatalf("renderCaptchaImage error = %q, want merge error", err.Error())
+	}
 }

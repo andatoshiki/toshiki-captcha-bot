@@ -6,6 +6,8 @@ import (
 	"image/jpeg"
 	"log"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -218,32 +220,11 @@ func onJoin(c tele.Context) error {
 	})
 
 	// generate image
-	captchaGrids := make([]*gim.Grid, 0)
-	i := 0
-	for _, key := range answerKeys {
-		x := 10
-		if i > 0 {
-			x = i * 100
-		}
-		captchaGrids = append(captchaGrids, &gim.Grid{
-			ImageFilePath: fmt.Sprintf("./assets/image/emoji/%v.png", key),
-			OffsetX:       x, OffsetY: 120,
-			Rotate: float64(rand.Intn(200-0) + 0),
-		})
-		i++
+	imgBytes, err := renderCaptchaImage(answerKeys)
+	if err != nil {
+		log.Printf("error: captcha image generation failed chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+		return nil
 	}
-
-	grids := []*gim.Grid{
-		{
-			ImageFilePath: "./gopherbg.jpg",
-			Grids:         captchaGrids,
-		},
-	}
-
-	rgba, _ := gim.New(grids, 1, 1).Merge()
-
-	var img bytes.Buffer
-	jpeg.Encode(&img, rgba, &jpeg.Options{Quality: 100})
 
 	// generate keyboard and send image
 	menu := &tele.ReplyMarkup{ResizeKeyboard: true}
@@ -271,7 +252,7 @@ func onJoin(c tele.Context) error {
 		menu.Inline(menu.Row(btn1...))
 	}
 
-	file := tele.FromReader(bytes.NewReader(img.Bytes()))
+	file := tele.FromReader(bytes.NewReader(imgBytes))
 	photo := &tele.Photo{File: file}
 	photo.Caption = genCaption(c.Sender())
 
@@ -316,6 +297,67 @@ func onJoin(c tele.Context) error {
 	}
 
 	return nil
+}
+
+func renderCaptchaImage(answerKeys []string) ([]byte, error) {
+	captchaGrids := make([]*gim.Grid, 0, len(answerKeys))
+	for i, key := range answerKeys {
+		x := 10
+		if i > 0 {
+			x = i * 100
+		}
+		captchaGrids = append(captchaGrids, &gim.Grid{
+			ImageFilePath: resolveAssetPath(fmt.Sprintf("./assets/image/emoji/%v.png", key)),
+			OffsetX:       x,
+			OffsetY:       120,
+			Rotate:        float64(rand.Intn(200)),
+		})
+	}
+
+	grids := []*gim.Grid{
+		{
+			ImageFilePath: resolveAssetPath("./gopherbg.jpg"),
+			Grids:         captchaGrids,
+		},
+	}
+
+	rgba, err := gim.New(grids, 1, 1).Merge()
+	if err != nil {
+		return nil, fmt.Errorf("merge captcha layers: %w", err)
+	}
+
+	var img bytes.Buffer
+	if err := jpeg.Encode(&img, rgba, &jpeg.Options{Quality: 100}); err != nil {
+		return nil, fmt.Errorf("encode captcha image: %w", err)
+	}
+
+	return img.Bytes(), nil
+}
+
+func resolveAssetPath(relPath string) string {
+	clean := filepath.Clean(relPath)
+	clean = strings.TrimPrefix(clean, "./")
+
+	candidates := []string{
+		filepath.Clean(relPath),
+		filepath.Join(".", clean),
+	}
+
+	if exePath, err := os.Executable(); err == nil && exePath != "" {
+		exeDir := filepath.Dir(exePath)
+		candidates = append(candidates,
+			filepath.Join(exeDir, clean),
+			filepath.Join(exeDir, "..", clean),
+		)
+	}
+
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	return filepath.Clean(relPath)
 }
 
 func handleAnswer(c tele.Context) error {
