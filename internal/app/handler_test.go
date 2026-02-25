@@ -445,12 +445,15 @@ func TestNewJoinStatus(t *testing.T) {
 		Chat: chat,
 	}
 
-	status := newJoinStatus(user, chat, challenge, message)
+	status := newJoinStatus(user, chat, challenge, message, true)
 	if status.UserID != 42 {
 		t.Fatalf("user id = %d, want 42", status.UserID)
 	}
 	if status.ChatID != -100123 {
 		t.Fatalf("chat id = %d, want -100123", status.ChatID)
+	}
+	if !status.ManualChallenge {
+		t.Fatalf("manual challenge = %t, want true", status.ManualChallenge)
 	}
 	if status.CaptchaMessage.ID != 77 {
 		t.Fatalf("captcha message id = %d, want 77", status.CaptchaMessage.ID)
@@ -463,6 +466,73 @@ func TestNewJoinStatus(t *testing.T) {
 	}
 }
 
+func TestShouldBanOnCaptchaFailure(t *testing.T) {
+	t.Parallel()
+
+	if got := shouldBanOnCaptchaFailure(captcha.JoinStatus{}); !got {
+		t.Fatalf("shouldBanOnCaptchaFailure(non-manual) = %t, want true", got)
+	}
+	if got := shouldBanOnCaptchaFailure(captcha.JoinStatus{ManualChallenge: true}); got {
+		t.Fatalf("shouldBanOnCaptchaFailure(manual) = %t, want false", got)
+	}
+}
+
+func TestCaptchaFailureNoticeText(t *testing.T) {
+	t.Parallel()
+
+	status := captcha.JoinStatus{
+		UserID:       42,
+		UserFullName: "Alice",
+	}
+
+	bannedText := captchaFailureNoticeText(status, true, 15*time.Second)
+	if !strings.Contains(bannedText, "has been banned") {
+		t.Fatalf("banned notice missing ban statement: %q", bannedText)
+	}
+	if !strings.Contains(bannedText, "15 seconds") {
+		t.Fatalf("banned notice missing ttl text: %q", bannedText)
+	}
+
+	manualText := captchaFailureNoticeText(status, false, 15*time.Second)
+	if !strings.Contains(manualText, "[Alice](tg://user?id=42) captcha failed.") {
+		t.Fatalf("manual notice missing failure statement: %q", manualText)
+	}
+	if strings.Contains(manualText, "has been banned") {
+		t.Fatalf("manual notice should not include ban statement: %q", manualText)
+	}
+}
+
+func TestCaptchaSuccessCallbackText(t *testing.T) {
+	t.Parallel()
+
+	normalText := captchaSuccessCallbackText(captcha.JoinStatus{})
+	if normalText != "Successfully joined." {
+		t.Fatalf("normal success text = %q, want %q", normalText, "Successfully joined.")
+	}
+
+	manualText := captchaSuccessCallbackText(captcha.JoinStatus{ManualChallenge: true})
+	if manualText != "Manual test captcha completed successfully." {
+		t.Fatalf("manual success text = %q, want %q", manualText, "Manual test captcha completed successfully.")
+	}
+}
+
+func TestCaptchaTimeoutNoticeText(t *testing.T) {
+	t.Parallel()
+
+	status := captcha.JoinStatus{
+		UserID:       42,
+		UserFullName: "Alice",
+	}
+
+	timeoutText := captchaTimeoutNoticeText(status)
+	if !strings.Contains(timeoutText, "[Alice](tg://user?id=42)") {
+		t.Fatalf("timeout notice missing mention: %q", timeoutText)
+	}
+	if !strings.Contains(timeoutText, "did not resolve the challenge in time") {
+		t.Fatalf("timeout notice missing timeout reason: %q", timeoutText)
+	}
+}
+
 func TestCaptchaSendTimeoutMarker(t *testing.T) {
 	t.Parallel()
 
@@ -470,4 +540,65 @@ func TestCaptchaSendTimeoutMarker(t *testing.T) {
 	if !errors.Is(wrapped, errCaptchaSendTimeout) {
 		t.Fatalf("expected wrapped error to match errCaptchaSendTimeout")
 	}
+}
+
+func TestResolveTestCaptchaTarget(t *testing.T) {
+	t.Parallel()
+
+	sender := &tele.User{ID: 1, Username: "admin_user"}
+	target := &tele.User{ID: 2, Username: "target_user"}
+
+	t.Run("resolves sender self by username", func(t *testing.T) {
+		t.Parallel()
+
+		msg := &tele.Message{}
+		got, err := resolveTestCaptchaTarget(sender, msg, "@admin_user")
+		if err != nil {
+			t.Fatalf("resolveTestCaptchaTarget returned error: %v", err)
+		}
+		if got == nil || got.ID != sender.ID {
+			t.Fatalf("resolved user id = %v, want %d", got, sender.ID)
+		}
+	})
+
+	t.Run("resolves replied target by username", func(t *testing.T) {
+		t.Parallel()
+
+		msg := &tele.Message{
+			ReplyTo: &tele.Message{
+				Sender: target,
+			},
+		}
+		got, err := resolveTestCaptchaTarget(sender, msg, "@target_user")
+		if err != nil {
+			t.Fatalf("resolveTestCaptchaTarget returned error: %v", err)
+		}
+		if got == nil || got.ID != target.ID {
+			t.Fatalf("resolved user id = %v, want %d", got, target.ID)
+		}
+	})
+
+	t.Run("fails when no reply for non-self username", func(t *testing.T) {
+		t.Parallel()
+
+		msg := &tele.Message{}
+		_, err := resolveTestCaptchaTarget(sender, msg, "@target_user")
+		if err == nil {
+			t.Fatalf("expected error when non-self username has no reply context")
+		}
+	})
+
+	t.Run("fails on mismatch between arg and replied username", func(t *testing.T) {
+		t.Parallel()
+
+		msg := &tele.Message{
+			ReplyTo: &tele.Message{
+				Sender: target,
+			},
+		}
+		_, err := resolveTestCaptchaTarget(sender, msg, "@other_user")
+		if err == nil {
+			t.Fatalf("expected mismatch error")
+		}
+	})
 }

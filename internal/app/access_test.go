@@ -11,8 +11,6 @@ import (
 )
 
 func TestCleanupPendingCaptchaForUserDeletesState(t *testing.T) {
-	t.Parallel()
-
 	origDB := db
 	origBot := bot
 	t.Cleanup(func() {
@@ -48,8 +46,6 @@ func TestCleanupPendingCaptchaForUserDeletesState(t *testing.T) {
 }
 
 func TestCleanupPendingCaptchaForUserNoopForMissingEntry(t *testing.T) {
-	t.Parallel()
-
 	origDB := db
 	origBot := bot
 	t.Cleanup(func() {
