@@ -5,7 +5,7 @@
 - Verifies new users with an emoji-image CAPTCHA before they can speak.
 - Restricts joiners until they solve the challenge or timeout.
 - Bans users who fail too many attempts or let the challenge expire.
-- Supports optional forum-topic delivery by parsing `bot.topic_link`.
+- Supports optional per-group forum-topic delivery through `groups[].topic`.
 - Runs with YAML config, CLI flags, and structured runtime logs.
 
 ### 1.2: Core behavior
@@ -45,9 +45,11 @@ go build -v -o toshiki-captcha-bot .
 bot:
   token: "123456789:telegram-bot-token"
   poll_timeout: 10s
-  public: true
-  allowed_user_ids: []
-  topic_link: "https://t.me/c/1234567890/4/77"
+  admin_user_ids: [123456789]
+
+groups:
+  - id: "@somepublicgroup"
+    topic: 4
 
 captcha:
   expiration: 1m
@@ -59,9 +61,10 @@ captcha:
 ### 3.2: Bot config reference
 - `bot.token`: required Telegram bot token.
 - `bot.poll_timeout`: long-poll timeout for update polling.
-- `bot.public`: if `true`, any chat can use the bot. if `false`, only chats tied to configured allowed users are accepted.
-- `bot.allowed_user_ids`: user IDs allowed to operate private mode. required when `bot.public` is `false`.
-- `bot.topic_link`: optional Telegram topic URL reference. Leave empty to send messages to the chat root.
+- `bot.admin_user_ids`: if empty, bot runs in public mode. if non-empty, bot runs in private mode and only configured admin IDs are treated as trusted operators.
+- `groups`: optional group-topic map used only in private mode.
+- `groups[].id`: public group username such as `@somepublicgroup`.
+- `groups[].topic`: optional single forum topic id for that group.
 
 ### 3.3: Captcha config reference
 - `captcha.expiration`: how long each challenge remains valid.
@@ -69,12 +72,11 @@ captcha:
 - `captcha.max_failures`: maximum wrong attempts before ban.
 - `captcha.failure_notice_ttl`: how long failure notices stay before auto-delete.
 
-### 3.4: Topic link parsing behavior
-- The bot extracts `message_thread_id` from `bot.topic_link` during config validation.
-- Supported sources include:
-  - Query parameter form: `?thread=<topic_id>`.
-  - Path-based forms such as `/c/<chat>/<topic>/<message>`.
-- If parsing fails, startup stops with a config validation error.
+### 3.4: Group topic behavior
+- Only public groups are supported for topic routing.
+- Private groups without a public `@username` are not supported and the bot will leave them.
+- In public mode (`bot.admin_user_ids` empty), the bot discards `groups` config.
+- In private mode, the bot resolves topic routing by matching incoming chat username to `groups[].id`.
 
 ## 4: Captcha flow
 ### 4.1: Join to pass flow
@@ -96,7 +98,12 @@ captcha:
 
 ### 4.4: Utility command
 - `/ping` replies with `pong` and measured latency in milliseconds.
-- `/ping` is sender-restricted and only works for user IDs listed in `bot.allowed_user_ids`.
+- `/ping` is sender-restricted and only works for user IDs listed in `bot.admin_user_ids`.
+- `/testcaptcha` trigger steps: (1) add your user ID to `bot.admin_user_ids`, (2) run `/testcaptcha` inside an allowed public group where the bot is already present, (3) bot issues a normal captcha challenge against the command sender for validation.
+- `/testcaptcha` uses configured user ID checks only; Telegram chat-admin role is not required, but private chat dialogs and non-admin senders are ignored.
+- Admin command suggestions are synced per configured admin user ID (private chat scope, and group member scope when groups are configured).
+- If a non-admin sender runs `/ping` or `/testcaptcha`, the bot replies with an explicit access-denied message.
+- Command scope sync state is stored in a hidden file beside your config path (example: `.config.yaml.command-scopes.json`) so removed admin IDs can be cleaned up on the next startup.
 
 ## 5: Development
 ### 5.1: Run tests
@@ -106,7 +113,7 @@ go test ./...
 
 ### 5.2: Useful local checks
 ```bash
-go test ./... -run TestParseTopicIDReference
+go test ./... -run TestNormalizePublicGroupID
 
 go run . -h
 go run . -v
@@ -114,7 +121,7 @@ go run . -v
 
 ### 5.3: Key files
 - `main.go`: startup, CLI handling, bot wiring, and runtime logging.
-- `config.go`: YAML load, defaults, validation, and topic-link parsing.
+- `config.go`: YAML load, defaults, validation, mode derivation, and group-topic mapping.
 - `handler.go`: join handling, challenge validation, failure/expiry paths.
 - `helper.go`: caption generation, send options, and helpers.
 - `config.example.yaml`: ready-to-copy config template.
@@ -140,17 +147,17 @@ go run . -v
 ### 7.1: Startup fails on config
 - Confirm `bot.token` is non-empty.
 - Confirm all duration values are greater than zero.
-- Confirm `bot.topic_link` is either empty or a valid Telegram link.
+- Confirm `groups[].id` values are valid public usernames when private mode is enabled.
 
 ### 7.2: Bot does not handle joins
 - Verify bot is admin in the target group.
 - Verify privacy mode and permissions allow required updates/actions.
 - Confirm long polling is active and token is correct.
-- If `bot.public` is `false`, confirm at least one chat admin user ID is listed in `bot.allowed_user_ids`.
+- If private mode is enabled, confirm at least one ID is set in `bot.admin_user_ids`.
 
 ### 7.3: Topic routing is not applied
-- Ensure `bot.topic_link` points to the intended forum topic.
-- Check startup logs for resolved `topic_thread_id`.
+- Ensure the chat username exists in `groups[].id` and a valid `groups[].topic` is set.
+- Check startup logs for loaded `topic_mappings`.
 
 ## 8: License and attribution
 ### 8.1: License
