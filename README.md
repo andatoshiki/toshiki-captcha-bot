@@ -117,13 +117,16 @@ go test ./... -run TestNormalizePublicGroupID
 
 go run . -h
 go run . -v
+go run ./cmd/toshiki-captcha-bot -h
 ```
 
 ### 5.3: Key files
-- `main.go`: startup, CLI handling, bot wiring, and runtime logging.
-- `config.go`: YAML load, defaults, validation, mode derivation, and group-topic mapping.
-- `handler.go`: join handling, challenge validation, failure/expiry paths.
-- `helper.go`: caption generation, send options, and helpers.
+- `main.go`: root entrypoint compatible with existing build workflows.
+- `cmd/toshiki-captcha-bot/main.go`: explicit CLI app entrypoint.
+- `internal/app/app.go`: startup, CLI handling, bot wiring, and runtime logging.
+- `internal/app/config.go`: YAML load, defaults, validation, mode derivation, and group-topic mapping.
+- `internal/app/handler.go`: join handling, challenge validation, failure/expiry paths.
+- `internal/app/helper.go`: caption generation, send options, and helpers.
 - `config.example.yaml`: ready-to-copy config template.
 
 ## 6: Release and distribution
@@ -142,6 +145,7 @@ go run . -v
   - `main.Version`
   - `main.Commit`
   - `main.BuildTime`
+- Entry points pass these values into `internal/app` during startup.
 
 ## 7: Operations and troubleshooting
 ### 7.1: Startup fails on config
