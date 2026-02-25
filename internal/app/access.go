@@ -5,6 +5,7 @@ import (
 	"log"
 
 	tele "gopkg.in/telebot.v3"
+	"toshiki-captcha-bot/internal/captcha"
 	"toshiki-captcha-bot/internal/policy"
 )
 
@@ -98,9 +99,33 @@ func onUserLeft(c tele.Context) error {
 	}
 
 	if c.Sender() != nil {
-		db.Delete(fmt.Sprintf("%v-%v", c.Sender().ID, c.Chat().ID))
+		cleanupPendingCaptchaForUser(c.Chat(), c.Sender())
 		log.Printf("User left user_id=%d chat_id=%d", c.Sender().ID, c.Chat().ID)
 	}
 
 	return nil
+}
+
+func cleanupPendingCaptchaForUser(chat *tele.Chat, user *tele.User) {
+	if chat == nil || user == nil || db == nil {
+		return
+	}
+
+	kvID := fmt.Sprintf("%v-%v", user.ID, chat.ID)
+	value, found := db.Get(kvID)
+	if !found {
+		return
+	}
+
+	if status, ok := value.(captcha.JoinStatus); ok {
+		if bot == nil {
+			log.Printf("warn: pending captcha cleanup skipped reason=bot_not_initialized chat_id=%d user_id=%d", chat.ID, user.ID)
+		} else if err := bot.Delete(&status.CaptchaMessage); err != nil {
+			log.Printf("warn: failed to delete pending captcha on user leave chat_id=%d user_id=%d message_id=%d err=%v", chat.ID, user.ID, status.CaptchaMessage.ID, err)
+		}
+	}
+
+	if err := db.Delete(kvID); err != nil {
+		log.Printf("warn: failed to delete pending captcha state on user leave chat_id=%d user_id=%d err=%v", chat.ID, user.ID, err)
+	}
 }
