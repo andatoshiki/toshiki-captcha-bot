@@ -3,12 +3,13 @@ package captcha
 import tele "gopkg.in/telebot.v3"
 
 type JoinStatus struct {
-	UserID         int64
-	UserFullName   string
-	CaptchaAnswer  []string
-	SolvedCaptcha  int
-	FailCaptcha    int
-	ChatID         int64
-	CaptchaMessage tele.Message
-	Buttons        []tele.InlineButton
+	UserID          int64
+	UserFullName    string
+	ManualChallenge bool
+	CaptchaAnswer   []string
+	SolvedCaptcha   int
+	FailCaptcha     int
+	ChatID          int64
+	CaptchaMessage  tele.Message
+	Buttons         []tele.InlineButton
 }
