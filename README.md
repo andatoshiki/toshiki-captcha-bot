@@ -124,6 +124,8 @@ go run ./cmd/toshiki-captcha-bot -h
 - `main.go`: root entrypoint compatible with existing build workflows.
 - `cmd/toshiki-captcha-bot/main.go`: explicit CLI app entrypoint.
 - `internal/app`: runtime wiring and Telegram handlers.
+- `internal/settings`: YAML config schema loading validation and normalization.
+- `internal/policy`: chat and sender authorization policy checks.
 - `internal/cli`: command-line parsing and usage text.
 - `internal/version`: build and runtime version rendering.
 - `internal/commandscope`: persisted Telegram command scope reconciliation state.
