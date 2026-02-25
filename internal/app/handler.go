@@ -233,7 +233,7 @@ func onJoin(c tele.Context) error {
 		return nil
 	}
 
-	msg, err := sendCaptchaChallenge(c.Chat(), c.Sender(), challenge.ImageBytes, genCaption(c.Sender()), challenge.Markup)
+	msg, err := sendCaptchaChallenge(c.Chat(), challenge.ImageBytes, genCaption(c.Sender()), challenge.Markup)
 	if err != nil {
 		if errors.Is(err, errCaptchaSendTimeout) {
 			// Timeout is delivery-uncertain: do not restore original rights.
@@ -340,7 +340,7 @@ func restoreUserRestriction(chat *tele.Chat, user *tele.User, member *tele.ChatM
 	)
 }
 
-func sendCaptchaChallenge(chat *tele.Chat, user *tele.User, imageBytes []byte, caption string, markup *tele.ReplyMarkup) (*tele.Message, error) {
+func sendCaptchaChallenge(chat *tele.Chat, imageBytes []byte, caption string, markup *tele.ReplyMarkup) (*tele.Message, error) {
 	file := tele.FromReader(bytes.NewReader(imageBytes))
 	photo := &tele.Photo{File: file}
 	photo.Caption = caption
