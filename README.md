@@ -123,10 +123,11 @@ go run ./cmd/toshiki-captcha-bot -h
 ### 5.3: Key files
 - `main.go`: root entrypoint compatible with existing build workflows.
 - `cmd/toshiki-captcha-bot/main.go`: explicit CLI app entrypoint.
-- `internal/app/app.go`: startup, CLI handling, bot wiring, and runtime logging.
-- `internal/app/config.go`: YAML load, defaults, validation, mode derivation, and group-topic mapping.
-- `internal/app/handler.go`: join handling, challenge validation, failure/expiry paths.
-- `internal/app/helper.go`: caption generation, send options, and helpers.
+- `internal/app`: runtime wiring and Telegram handlers.
+- `internal/cli`: command-line parsing and usage text.
+- `internal/version`: build and runtime version rendering.
+- `internal/commandscope`: persisted Telegram command scope reconciliation state.
+- `internal/captcha`: captcha domain data models and emoji catalog.
 - `config.example.yaml`: ready-to-copy config template.
 
 ## 6: Release and distribution
@@ -145,7 +146,7 @@ go run ./cmd/toshiki-captcha-bot -h
   - `main.Version`
   - `main.Commit`
   - `main.BuildTime`
-- Entry points pass these values into `internal/app` during startup.
+- Entry points pass these values into `internal/version` during startup.
 
 ## 7: Operations and troubleshooting
 ### 7.1: Startup fails on config
