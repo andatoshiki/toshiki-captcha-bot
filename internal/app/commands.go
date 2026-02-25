@@ -29,7 +29,7 @@ func helpText() string {
 		"/help show this help message (public)",
 		"/version show build and runtime version details (public)",
 		"/ping check bot reachability and latency in ms (admin ids only)",
-		"/testcaptcha @username manually trigger a captcha challenge (admin only)",
+		"/testcaptcha manually trigger a captcha challenge by replying to a user message (admin only)",
 		"",
 		"credits:",
 		"author: " + authorInfo,

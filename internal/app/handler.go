@@ -153,18 +153,10 @@ func onTestCaptcha(c tele.Context) error {
 		return nil
 	}
 
-	args := c.Args()
-	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
-		if sendErr := c.Send("Usage: `/testcaptcha @username` as a reply to that user's message.", tele.ModeMarkdown); sendErr != nil {
-			log.Printf("warn: failed to send testcaptcha usage chat_id=%d actor_user_id=%d err=%v", c.Chat().ID, c.Sender().ID, sendErr)
-		}
-		return nil
-	}
-
-	targetUser, err := resolveTestCaptchaTarget(c.Sender(), c.Message(), args[0])
+	targetUser, err := resolveTestCaptchaTargetFromReply(c.Message())
 	if err != nil {
-		log.Printf("warn: testcaptcha target resolution failed chat_id=%d actor_user_id=%d arg=%q err=%v", c.Chat().ID, c.Sender().ID, args[0], err)
-		if sendErr := c.Send("Unable to resolve target user. Use `/testcaptcha @username` as a reply to that user's message.", tele.ModeMarkdown); sendErr != nil {
+		log.Printf("warn: testcaptcha target resolution failed chat_id=%d actor_user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+		if sendErr := c.Send("Usage: reply to the target user's message with `/testcaptcha`.", tele.ModeMarkdown); sendErr != nil {
 			log.Printf("warn: failed to send testcaptcha resolution error chat_id=%d actor_user_id=%d err=%v", c.Chat().ID, c.Sender().ID, sendErr)
 		}
 		return nil
@@ -345,39 +337,14 @@ func issueCaptchaChallenge(c tele.Context, targetUser *tele.User, deleteTriggerM
 	return nil
 }
 
-func resolveTestCaptchaTarget(sender *tele.User, message *tele.Message, rawArg string) (*tele.User, error) {
-	if sender == nil || message == nil {
+func resolveTestCaptchaTargetFromReply(message *tele.Message) (*tele.User, error) {
+	if message == nil {
 		return nil, fmt.Errorf("missing command context")
-	}
-
-	arg := strings.TrimSpace(rawArg)
-	if arg == "" {
-		return nil, fmt.Errorf("target argument is empty")
-	}
-	if !strings.HasPrefix(arg, "@") {
-		return nil, fmt.Errorf("target must be a username like @example")
-	}
-
-	expectedUsername := strings.ToLower(strings.TrimPrefix(arg, "@"))
-	if expectedUsername == "" {
-		return nil, fmt.Errorf("target username is empty")
-	}
-
-	if senderUsername := strings.ToLower(strings.TrimSpace(sender.Username)); senderUsername == expectedUsername {
-		return sender, nil
 	}
 
 	reply := message.ReplyTo
 	if reply == nil || reply.Sender == nil {
-		return nil, fmt.Errorf("username resolution requires replying to the target user's message")
-	}
-
-	replyUsername := strings.ToLower(strings.TrimSpace(reply.Sender.Username))
-	if replyUsername == "" {
-		return nil, fmt.Errorf("reply target has no public username")
-	}
-	if replyUsername != expectedUsername {
-		return nil, fmt.Errorf("reply target username mismatch expected=@%s got=@%s", expectedUsername, replyUsername)
+		return nil, fmt.Errorf("target resolution requires replying to the target user's message")
 	}
 
 	return reply.Sender, nil

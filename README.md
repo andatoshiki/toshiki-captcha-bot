@@ -101,8 +101,7 @@ captcha:
 ### 4.4: Utility command
 - `/ping` replies with `pong` and measured latency in milliseconds.
 - `/ping` is sender-restricted and only works for user IDs listed in `bot.admin_user_ids`.
-- `/testcaptcha @username` trigger steps: (1) add your user ID to `bot.admin_user_ids`, (2) run it inside an allowed public group as a reply to that user's message, (3) bot issues a captcha test for that target user.
-- `/testcaptcha` without `@username` is rejected.
+- `/testcaptcha` trigger steps: (1) add your user ID to `bot.admin_user_ids`, (2) run it inside an allowed public group as a reply to that user's message, (3) bot issues a captcha test for that target user even if they have no public username.
 - `/testcaptcha` is a test flow and does not change the target user's chat permissions on pass/fail.
 - If a test captcha is already pending for the same user, the bot replies that captcha is in progress and does not create a second one.
 - If a test captcha expires unresolved, the bot sends a timeout notice.
