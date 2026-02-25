@@ -280,6 +280,43 @@ func TestLoadConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("private mode normalizes topic one to root", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.yaml")
+		content := strings.Join([]string{
+			"bot:",
+			"  token: test-token",
+			"  admin_user_ids: [1001]",
+			"groups:",
+			"  - id: \"@SomePublicGroup\"",
+			"    topic: 1",
+			"",
+		}, "\n")
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write config file: %v", err)
+		}
+
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load returned error: %v", err)
+		}
+
+		if len(cfg.Groups) != 1 {
+			t.Fatalf("Groups length = %d, want 1", len(cfg.Groups))
+		}
+		if cfg.Groups[0].Topic != 0 {
+			t.Fatalf("Groups[0].Topic = %d, want 0", cfg.Groups[0].Topic)
+		}
+		if topic := cfg.TopicForChatUsername("somepublicgroup"); topic != 0 {
+			t.Fatalf("TopicForChatUsername(somepublicgroup) = %d, want 0", topic)
+		}
+		if _, ok := cfg.groupTopics["somepublicgroup"]; ok {
+			t.Fatalf("groupTopics[somepublicgroup] should not be set when topic is 1")
+		}
+	})
+
 	t.Run("public mode discards groups section", func(t *testing.T) {
 		t.Parallel()
 

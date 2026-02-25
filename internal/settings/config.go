@@ -128,11 +128,18 @@ func (c *RuntimeConfig) Validate() error {
 			seen[normalizedGroupID] = struct{}{}
 			groupAllow[normalizedGroupID] = struct{}{}
 
-			if group.Topic < 0 {
+			topicID := group.Topic
+			if topicID < 0 {
 				return fmt.Errorf("groups[%d].topic must be greater than zero when set", i)
 			}
-			if group.Topic > 0 {
-				groupTopics[normalizedGroupID] = group.Topic
+			if topicID == 1 {
+				// Telegram general topic should be sent without message_thread_id.
+				c.Groups[i].Topic = 0
+				continue
+			}
+			c.Groups[i].Topic = topicID
+			if topicID > 1 {
+				groupTopics[normalizedGroupID] = topicID
 			}
 		}
 
