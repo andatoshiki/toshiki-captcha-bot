@@ -45,6 +45,7 @@ go build -v -o toshiki-captcha-bot .
 bot:
   token: "123456789:telegram-bot-token"
   poll_timeout: 10s
+  request_timeout: 30s
   admin_user_ids: [123456789]
 
 groups:
@@ -61,6 +62,7 @@ captcha:
 ### 3.2: Bot config reference
 - `bot.token`: required Telegram bot token.
 - `bot.poll_timeout`: long-poll timeout for update polling.
+- `bot.request_timeout`: outbound Telegram API request timeout (used for send/edit/delete calls).
 - `bot.admin_user_ids`: if empty, bot runs in public mode. if non-empty, bot runs in private mode and only configured admin IDs are treated as trusted operators.
 - `groups`: optional in public mode. required in private mode with at least one public group entry.
 - `groups[].id`: public group username such as `@somepublicgroup`.

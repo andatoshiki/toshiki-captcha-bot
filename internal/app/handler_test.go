@@ -1,8 +1,12 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	tele "gopkg.in/telebot.v3"
 	"toshiki-captcha-bot/internal/captcha"
@@ -170,4 +174,300 @@ func TestRespondAdminOnlyCommandDenied(t *testing.T) {
 			t.Fatalf("sendCount = %d, want 1", ctx.sendCount)
 		}
 	})
+}
+
+func TestRenderCaptchaImageWithMissingAsset(t *testing.T) {
+	t.Parallel()
+
+	_, err := renderCaptchaImage([]string{"does_not_exist"})
+	if err == nil {
+		t.Fatalf("renderCaptchaImage expected error for missing asset key")
+	}
+	if !strings.Contains(err.Error(), "merge captcha layers") {
+		t.Fatalf("renderCaptchaImage error = %q, want merge error", err.Error())
+	}
+}
+
+func TestBuildCaptchaChallenge(t *testing.T) {
+	t.Parallel()
+
+	challenge, err := buildCaptchaChallenge(4, 6)
+	if err != nil {
+		t.Fatalf("buildCaptchaChallenge returned error: %v", err)
+	}
+
+	if len(challenge.AnswerKeys) != 4 {
+		t.Fatalf("answer key count = %d, want 4", len(challenge.AnswerKeys))
+	}
+	if len(challenge.Buttons) != 10 {
+		t.Fatalf("button count = %d, want 10", len(challenge.Buttons))
+	}
+	if challenge.Markup == nil {
+		t.Fatalf("markup is nil")
+	}
+	if len(challenge.Markup.InlineKeyboard) == 0 {
+		t.Fatalf("markup has no inline keyboard rows")
+	}
+	if len(challenge.ImageBytes) == 0 {
+		t.Fatalf("image bytes are empty")
+	}
+
+	buttonsByKey := make(map[string]struct{}, len(challenge.Buttons))
+	for _, button := range challenge.Buttons {
+		buttonsByKey[button.Unique] = struct{}{}
+	}
+	for _, answerKey := range challenge.AnswerKeys {
+		if _, ok := buttonsByKey[answerKey]; !ok {
+			t.Fatalf("answer key %q is not present in challenge buttons", answerKey)
+		}
+	}
+}
+
+func TestApplyCaptchaChallenge(t *testing.T) {
+	t.Parallel()
+
+	status := captcha.JoinStatus{
+		SolvedCaptcha: 3,
+		FailCaptcha:   2,
+	}
+	challenge := captchaChallenge{
+		AnswerKeys: []string{"u1", "u2", "u3", "u4"},
+		Buttons: []tele.InlineButton{
+			{Text: "A", Unique: "u1"},
+			{Text: "B", Unique: "u2"},
+		},
+	}
+	message := tele.Message{ID: 77}
+
+	applyCaptchaChallenge(&status, challenge, message)
+
+	if status.SolvedCaptcha != 0 {
+		t.Fatalf("solved captcha = %d, want 0", status.SolvedCaptcha)
+	}
+	if status.FailCaptcha != 2 {
+		t.Fatalf("fail captcha = %d, want 2", status.FailCaptcha)
+	}
+	if status.CaptchaMessage.ID != 77 {
+		t.Fatalf("captcha message id = %d, want 77", status.CaptchaMessage.ID)
+	}
+	if len(status.CaptchaAnswer) != 4 {
+		t.Fatalf("captcha answer count = %d, want 4", len(status.CaptchaAnswer))
+	}
+	if len(status.Buttons) != 2 {
+		t.Fatalf("button count = %d, want 2", len(status.Buttons))
+	}
+
+	challenge.Buttons[0].Text = "mutated"
+	if status.Buttons[0].Text == "mutated" {
+		t.Fatalf("status buttons should be copied, got shared underlying data")
+	}
+}
+
+func TestCaptchaMarkupFromButtons(t *testing.T) {
+	t.Parallel()
+
+	t.Run("single row when up to five buttons", func(t *testing.T) {
+		t.Parallel()
+
+		buttons := []tele.InlineButton{
+			{Unique: "u1"},
+			{Unique: "u2"},
+			{Unique: "u3"},
+			{Unique: "u4"},
+			{Unique: "u5"},
+		}
+		markup := captchaMarkupFromButtons(buttons)
+
+		if len(markup.InlineKeyboard) != 1 {
+			t.Fatalf("rows = %d, want 1", len(markup.InlineKeyboard))
+		}
+		if len(markup.InlineKeyboard[0]) != 5 {
+			t.Fatalf("row size = %d, want 5", len(markup.InlineKeyboard[0]))
+		}
+	})
+
+	t.Run("two rows when more than five buttons", func(t *testing.T) {
+		t.Parallel()
+
+		buttons := []tele.InlineButton{
+			{Unique: "u1"},
+			{Unique: "u2"},
+			{Unique: "u3"},
+			{Unique: "u4"},
+			{Unique: "u5"},
+			{Unique: "u6"},
+			{Unique: "u7"},
+		}
+		markup := captchaMarkupFromButtons(buttons)
+
+		if len(markup.InlineKeyboard) != 2 {
+			t.Fatalf("rows = %d, want 2", len(markup.InlineKeyboard))
+		}
+		if len(markup.InlineKeyboard[0]) != 5 {
+			t.Fatalf("row0 size = %d, want 5", len(markup.InlineKeyboard[0]))
+		}
+		if len(markup.InlineKeyboard[1]) != 2 {
+			t.Fatalf("row1 size = %d, want 2", len(markup.InlineKeyboard[1]))
+		}
+	})
+}
+
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+func TestIsTimeoutLikeError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "context deadline exceeded",
+			err:  context.DeadlineExceeded,
+			want: true,
+		},
+		{
+			name: "net timeout",
+			err:  timeoutErr{},
+			want: true,
+		},
+		{
+			name: "telegram client timeout string",
+			err:  fmt.Errorf("telebot: Post ...: context deadline exceeded (Client.Timeout exceeded while awaiting headers)"),
+			want: true,
+		},
+		{
+			name: "non-timeout",
+			err:  errors.New("bad request"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := isTimeoutLikeError(tt.err)
+			if got != tt.want {
+				t.Fatalf("isTimeoutLikeError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyCaptchaRestriction(t *testing.T) {
+	t.Parallel()
+
+	member := &tele.ChatMember{
+		User:   &tele.User{ID: 42},
+		Rights: tele.NoRestrictions(),
+	}
+
+	start := time.Now().Unix()
+	applyCaptchaRestriction(member, 2*time.Minute)
+
+	if member.RestrictedUntil <= start {
+		t.Fatalf("restricted_until = %d, expected > %d", member.RestrictedUntil, start)
+	}
+	if member.Rights != tele.NoRights() {
+		t.Fatalf("rights = %+v, want %+v", member.Rights, tele.NoRights())
+	}
+}
+
+func TestBindCaptchaMessageIfUnset(t *testing.T) {
+	t.Parallel()
+
+	t.Run("binds when message id is unknown", func(t *testing.T) {
+		t.Parallel()
+
+		status := &captcha.JoinStatus{}
+		msg := &tele.Message{
+			ID:   55,
+			Chat: &tele.Chat{ID: -1001},
+		}
+
+		changed := bindCaptchaMessageIfUnset(status, msg)
+		if !changed {
+			t.Fatalf("expected bind to report changed=true")
+		}
+		if status.CaptchaMessage.ID != 55 {
+			t.Fatalf("captcha message id = %d, want 55", status.CaptchaMessage.ID)
+		}
+	})
+
+	t.Run("does not overwrite when already bound", func(t *testing.T) {
+		t.Parallel()
+
+		status := &captcha.JoinStatus{
+			CaptchaMessage: tele.Message{ID: 10},
+		}
+		msg := &tele.Message{ID: 99}
+
+		changed := bindCaptchaMessageIfUnset(status, msg)
+		if changed {
+			t.Fatalf("expected bind to report changed=false")
+		}
+		if status.CaptchaMessage.ID != 10 {
+			t.Fatalf("captcha message id = %d, want 10", status.CaptchaMessage.ID)
+		}
+	})
+}
+
+func TestNewJoinStatus(t *testing.T) {
+	t.Parallel()
+
+	user := &tele.User{
+		ID:        42,
+		FirstName: "Alice",
+		LastName:  "Bob",
+	}
+	chat := &tele.Chat{ID: -100123}
+	challenge := captchaChallenge{
+		AnswerKeys: []string{"u1", "u2", "u3", "u4"},
+		Buttons: []tele.InlineButton{
+			{Unique: "u1"},
+			{Unique: "u2"},
+		},
+	}
+	message := tele.Message{
+		ID:   77,
+		Chat: chat,
+	}
+
+	status := newJoinStatus(user, chat, challenge, message)
+	if status.UserID != 42 {
+		t.Fatalf("user id = %d, want 42", status.UserID)
+	}
+	if status.ChatID != -100123 {
+		t.Fatalf("chat id = %d, want -100123", status.ChatID)
+	}
+	if status.CaptchaMessage.ID != 77 {
+		t.Fatalf("captcha message id = %d, want 77", status.CaptchaMessage.ID)
+	}
+	if status.UserFullName != "Alice Bob" {
+		t.Fatalf("user full name = %q, want %q", status.UserFullName, "Alice Bob")
+	}
+	if len(status.CaptchaAnswer) != 4 {
+		t.Fatalf("captcha answer count = %d, want 4", len(status.CaptchaAnswer))
+	}
+}
+
+func TestCaptchaSendTimeoutMarker(t *testing.T) {
+	t.Parallel()
+
+	wrapped := fmt.Errorf("%w: %v", errCaptchaSendTimeout, context.DeadlineExceeded)
+	if !errors.Is(wrapped, errCaptchaSendTimeout) {
+		t.Fatalf("expected wrapped error to match errCaptchaSendTimeout")
+	}
 }
