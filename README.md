@@ -62,7 +62,7 @@ captcha:
 - `bot.token`: required Telegram bot token.
 - `bot.poll_timeout`: long-poll timeout for update polling.
 - `bot.admin_user_ids`: if empty, bot runs in public mode. if non-empty, bot runs in private mode and only configured admin IDs are treated as trusted operators.
-- `groups`: optional group-topic map used only in private mode.
+- `groups`: optional in public mode. required in private mode with at least one public group entry.
 - `groups[].id`: public group username such as `@somepublicgroup`.
 - `groups[].topic`: optional single forum topic id for that group.
 
