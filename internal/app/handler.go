@@ -483,7 +483,7 @@ func captchaSuccessCallbackText(status captcha.JoinStatus) string {
 
 func notYourCaptchaCallbackResponse() *tele.CallbackResponse {
 	return &tele.CallbackResponse{
-		Text:      "This is not your captcha challenge Please solve your own challenge",
+		Text:      "This is not your captcha challenge. Please solve your own challenge.",
 		ShowAlert: true,
 	}
 }
