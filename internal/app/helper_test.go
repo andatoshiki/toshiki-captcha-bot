@@ -103,6 +103,17 @@ func TestTopicThreadIDForChat(t *testing.T) {
 			wantID: 42,
 		},
 		{
+			name: "private mode treats topic one as root",
+			cfg: func(t *testing.T) settings.RuntimeConfig {
+				cfg := settings.DefaultRuntimeConfig()
+				cfg.Bot.AdminUserIDs = []int64{1001}
+				cfg.Groups = []settings.GroupTopicConfig{{ID: "@somegroup", Topic: 1}}
+				return mustValidatedRuntimeConfig(t, cfg)
+			}(t),
+			chat:   &tele.Chat{Type: tele.ChatSuperGroup, Username: "somegroup"},
+			wantID: 0,
+		},
+		{
 			name: "private mode returns root for unknown group",
 			cfg: func(t *testing.T) settings.RuntimeConfig {
 				cfg := settings.DefaultRuntimeConfig()
