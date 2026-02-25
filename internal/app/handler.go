@@ -30,6 +30,8 @@ const (
 	captchaDecoyCount  = 6
 )
 
+var errCaptchaSendTimeout = errors.New("captcha challenge send timeout")
+
 type captchaChallenge struct {
 	AnswerKeys []string
 	Buttons    []tele.InlineButton
@@ -231,22 +233,45 @@ func onJoin(c tele.Context) error {
 		return nil
 	}
 
-	msg, err := sendCaptchaChallengeWithRetry(c.Chat(), c.Sender(), challenge.ImageBytes, genCaption(c.Sender()), challenge.Markup)
+	msg, err := sendCaptchaChallenge(c.Chat(), c.Sender(), challenge.ImageBytes, genCaption(c.Sender()), challenge.Markup)
 	if err != nil {
+		if errors.Is(err, errCaptchaSendTimeout) {
+			// Timeout is delivery-uncertain: do not restore original rights.
+			// Keep user restricted and persist challenge state with unknown message id.
+			applyCaptchaRestriction(chatMember, cfg.Captcha.Expiration)
+			if restrictErr := bot.Restrict(c.Chat(), chatMember); restrictErr != nil {
+				log.Printf("warn: failed to extend user restriction after timeout chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, restrictErr)
+			}
+
+			unknownMessage := tele.Message{Chat: c.Chat()}
+			status := newJoinStatus(c.Sender(), c.Chat(), challenge, unknownMessage)
+			db.Set(kvID, status, cfg.Captcha.Expiration)
+			log.Printf(
+				"warn: captcha delivery uncertain chat_id=%d user_id=%d challenge_message_id=unknown action=keep_restricted_and_wait_for_callback",
+				c.Chat().ID,
+				c.Sender().ID,
+			)
+			return nil
+		}
+
 		log.Printf("error: failed to send captcha challenge chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
 		restoreUserRestriction(c.Chat(), c.Sender(), &originalMember, "captcha_send_failed")
 		return nil
 	}
 
-	status := captcha.JoinStatus{
-		UserID: c.Sender().ID,
-		ChatID: c.Chat().ID,
+	// Refresh restriction window after successful challenge delivery so
+	// expiration starts from when user can actually solve the captcha.
+	applyCaptchaRestriction(chatMember, cfg.Captcha.Expiration)
+	if err := bot.Restrict(c.Chat(), chatMember); err != nil {
+		log.Printf("warn: failed to refresh user restriction window chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+		if err := bot.Delete(msg); err != nil {
+			log.Printf("warn: failed to delete captcha after restriction refresh failure chat_id=%d user_id=%d message_id=%d err=%v", c.Chat().ID, c.Sender().ID, msg.ID, err)
+		}
+		restoreUserRestriction(c.Chat(), c.Sender(), &originalMember, "captcha_restriction_refresh_failed")
+		return nil
 	}
-	applyCaptchaChallenge(&status, challenge, *msg)
 
-	status.UserFullName = c.Sender().FirstName + " " + c.Sender().LastName
-	status.UserFullName = sanitizeName(status.UserFullName)
-
+	status := newJoinStatus(c.Sender(), c.Chat(), challenge, *msg)
 	db.Set(kvID, status, cfg.Captcha.Expiration)
 	log.Printf(
 		"Captcha issued chat_id=%d user_id=%d challenge_message_id=%d answer_count=%d topic_thread_id=%d",
@@ -258,6 +283,19 @@ func onJoin(c tele.Context) error {
 	)
 
 	return nil
+}
+
+func newJoinStatus(user *tele.User, chat *tele.Chat, challenge captchaChallenge, message tele.Message) captcha.JoinStatus {
+	status := captcha.JoinStatus{}
+	if user != nil {
+		status.UserID = user.ID
+		status.UserFullName = sanitizeName(user.FirstName + " " + user.LastName)
+	}
+	if chat != nil {
+		status.ChatID = chat.ID
+	}
+	applyCaptchaChallenge(&status, challenge, message)
+	return status
 }
 
 func applyCaptchaRestriction(member *tele.ChatMember, duration time.Duration) {
@@ -302,50 +340,32 @@ func restoreUserRestriction(chat *tele.Chat, user *tele.User, member *tele.ChatM
 	)
 }
 
-func sendCaptchaChallengeWithRetry(chat *tele.Chat, user *tele.User, imageBytes []byte, caption string, markup *tele.ReplyMarkup) (*tele.Message, error) {
-	const maxAttempts = 3
-	var lastErr error
+func sendCaptchaChallenge(chat *tele.Chat, user *tele.User, imageBytes []byte, caption string, markup *tele.ReplyMarkup) (*tele.Message, error) {
+	file := tele.FromReader(bytes.NewReader(imageBytes))
+	photo := &tele.Photo{File: file}
+	photo.Caption = caption
 
-	chatID := int64(0)
-	userID := int64(0)
-	if chat != nil {
-		chatID = chat.ID
-	}
-	if user != nil {
-		userID = user.ID
+	msg, err := sendWithConfiguredTopic(chat, photo, tele.ModeMarkdown, markup)
+	if err == nil {
+		return msg, nil
 	}
 
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		file := tele.FromReader(bytes.NewReader(imageBytes))
-		photo := &tele.Photo{File: file}
-		photo.Caption = caption
-
-		msg, err := sendWithConfiguredTopic(chat, photo, tele.ModeMarkdown, markup)
-		if err == nil {
-			if attempt > 1 {
-				log.Printf("Captcha challenge send recovered chat_id=%d user_id=%d attempt=%d", chatID, userID, attempt)
-			}
-			return msg, nil
-		}
-
-		lastErr = err
-		if !isTimeoutLikeError(err) || attempt == maxAttempts {
-			break
-		}
-
-		backoff := time.Duration(attempt) * time.Second
-		log.Printf(
-			"warn: captcha challenge send timeout chat_id=%d user_id=%d attempt=%d next_retry_in=%s err=%v",
-			chatID,
-			userID,
-			attempt,
-			backoff,
-			err,
-		)
-		time.Sleep(backoff)
+	if isTimeoutLikeError(err) {
+		return nil, fmt.Errorf("%w: %v", errCaptchaSendTimeout, err)
 	}
 
-	return nil, lastErr
+	return nil, err
+}
+
+func bindCaptchaMessageIfUnset(status *captcha.JoinStatus, message *tele.Message) bool {
+	if status == nil || message == nil {
+		return false
+	}
+	if status.CaptchaMessage.ID != 0 {
+		return false
+	}
+	status.CaptchaMessage = *message
+	return true
 }
 
 func isTimeoutLikeError(err error) bool {
@@ -362,6 +382,186 @@ func isTimeoutLikeError(err error) bool {
 	lower := strings.ToLower(err.Error())
 	return strings.Contains(lower, "context deadline exceeded") ||
 		strings.Contains(lower, "client.timeout exceeded while awaiting headers")
+}
+
+func handleAnswer(c tele.Context) error {
+	if c == nil || c.Chat() == nil || c.Callback() == nil || c.Callback().Sender == nil || c.Callback().Message == nil {
+		log.Printf(
+			"warn: callback skipped reason=missing_callback_context has_context=%t has_chat=%t has_callback=%t has_sender=%t has_message=%t",
+			c != nil,
+			c != nil && c.Chat() != nil,
+			c != nil && c.Callback() != nil,
+			c != nil && c.Callback() != nil && c.Callback().Sender != nil,
+			c != nil && c.Callback() != nil && c.Callback().Message != nil,
+		)
+		return nil
+	}
+
+	if c.Chat().Type == tele.ChatPrivate {
+		return nil
+	}
+	if !isContextAuthorized(c) {
+		logAccessDenied(c, "callback")
+		return nil
+	}
+
+	// kvID is combination of user id and chat id
+	kvID := fmt.Sprintf("%v-%v", c.Callback().Sender.ID, c.Chat().ID)
+
+	messageID := c.Callback().Message.ID
+	answer := strings.TrimSpace(c.Callback().Data)
+	answer = strings.Split(answer, "|")[0]
+
+	status := captcha.JoinStatus{}
+	if data, found := db.Get(kvID); !found {
+		c.Respond(&tele.CallbackResponse{Text: "This challenge is not for you."})
+		log.Printf("Answer rejected (missing challenge) chat_id=%d user_id=%d", c.Chat().ID, c.Callback().Sender.ID)
+		return nil
+	} else {
+		status = data.(captcha.JoinStatus)
+	}
+
+	if bindCaptchaMessageIfUnset(&status, c.Callback().Message) {
+		if err := db.Update(kvID, status); err != nil {
+			log.Printf("warn: failed to persist captcha message binding chat_id=%d user_id=%d message_id=%d err=%v", c.Chat().ID, c.Callback().Sender.ID, messageID, err)
+		}
+		log.Printf("Captcha message bound chat_id=%d user_id=%d message_id=%d", c.Chat().ID, c.Callback().Sender.ID, messageID)
+	} else if messageID != status.CaptchaMessage.ID {
+		c.Respond(&tele.CallbackResponse{Text: "This challenge is not for you."})
+		log.Printf("Answer rejected (message mismatch) chat_id=%d user_id=%d got_message_id=%d expected_message_id=%d", c.Chat().ID, c.Callback().Sender.ID, messageID, status.CaptchaMessage.ID)
+		return nil
+	}
+
+	correct, expected := isNextCaptchaAnswer(status, answer)
+	if correct {
+		status.SolvedCaptcha++
+	} else {
+		status.FailCaptcha++
+		db.Update(kvID, status)
+		log.Printf(
+			"Answer rejected (wrong sequence) chat_id=%d user_id=%d got=%q expected=%q solved=%d total=%d",
+			c.Chat().ID,
+			c.Callback().Sender.ID,
+			answer,
+			expected,
+			status.SolvedCaptcha,
+			len(status.CaptchaAnswer),
+		)
+
+		if status.FailCaptcha >= cfg.Captcha.MaxFailures {
+			db.Delete(kvID)
+			c.Respond(&tele.CallbackResponse{Text: "Captcha failed, you have been banned, please contact admin with your another account.", ShowAlert: true})
+			if status.CaptchaMessage.ID > 0 {
+				if err := bot.Delete(&status.CaptchaMessage); err != nil {
+					log.Printf("warn: failed to delete failed captcha message chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+				}
+			}
+			if err := bot.Ban(c.Chat(), &tele.ChatMember{User: c.Sender()}, false); err != nil {
+				log.Printf("warn: failed to ban failed captcha user chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+			}
+
+			mention := fmt.Sprintf(`[%v](tg://user?id=%v)`, status.UserFullName, status.UserID)
+			msg := "Captcha failed, %v has been banned, please contact administrator if %v are real human with non-automated account"
+			msg += "\n\n this message will automatically removed in %s..."
+			msg = fmt.Sprintf(msg, mention, mention, humanizeDuration(cfg.Captcha.FailureNoticeTTL))
+			targetChat := status.CaptchaMessage.Chat
+			if targetChat == nil {
+				targetChat = c.Chat()
+			}
+			msgr, err := sendWithConfiguredTopic(targetChat, msg, tele.ModeMarkdown, nil)
+			if err == nil {
+				go func(msgr *tele.Message) {
+					time.Sleep(cfg.Captcha.FailureNoticeTTL)
+					if err := bot.Delete(msgr); err != nil {
+						log.Printf("warn: failed to delete failure notice message chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+					}
+				}(msgr)
+			} else {
+				log.Printf("warn: failed to send failure notice chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+			}
+			log.Printf("Captcha failed chat_id=%d user_id=%d solved=%d failed=%d", c.Chat().ID, c.Sender().ID, status.SolvedCaptcha, status.FailCaptcha)
+			return nil
+		}
+
+		challenge, err := buildCaptchaChallenge(captchaAnswerCount, captchaDecoyCount)
+		if err != nil {
+			log.Printf("error: failed to regenerate captcha challenge chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+			c.Respond(&tele.CallbackResponse{Text: "Wrong sequence. Please continue with the current puzzle.", ShowAlert: true})
+			return nil
+		}
+
+		file := tele.FromReader(bytes.NewReader(challenge.ImageBytes))
+		photo := &tele.Photo{File: file}
+		photo.Caption = genCaption(c.Sender())
+
+		newMsg, err := sendWithConfiguredTopic(c.Chat(), photo, tele.ModeMarkdown, challenge.Markup)
+		if err != nil {
+			log.Printf("error: failed to send regenerated captcha challenge chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+			c.Respond(&tele.CallbackResponse{Text: "Wrong sequence. Please continue with the current puzzle.", ShowAlert: true})
+			return nil
+		}
+
+		oldMessage := status.CaptchaMessage
+		applyCaptchaChallenge(&status, challenge, *newMsg)
+		db.Update(kvID, status)
+		if oldMessage.ID > 0 {
+			if err := bot.Delete(&oldMessage); err != nil {
+				log.Printf("warn: failed to delete previous captcha message chat_id=%d user_id=%d message_id=%d err=%v", c.Chat().ID, c.Sender().ID, oldMessage.ID, err)
+			}
+		}
+		c.Respond(&tele.CallbackResponse{Text: "Wrong sequence. A new puzzle has been generated.", ShowAlert: true})
+		log.Printf("Captcha regenerated chat_id=%d user_id=%d old_message_id=%d new_message_id=%d failed=%d", c.Chat().ID, c.Sender().ID, oldMessage.ID, newMsg.ID, status.FailCaptcha)
+		return nil
+	}
+
+	newButtons := make([]tele.InlineButton, 0)
+	for _, button := range status.Buttons {
+		if button.Unique == answer {
+			if correct {
+				button.Text = "✅"
+			} else {
+				button.Text = "❌"
+			}
+		}
+		newButtons = append(newButtons, button)
+	}
+	status.Buttons = newButtons
+
+	db.Update(kvID, status)
+
+	updateBtn := captchaMarkupFromButtons(newButtons)
+	if len(newButtons) == 0 {
+		log.Printf("warn: no captcha buttons available for update chat_id=%d user_id=%d", c.Chat().ID, c.Sender().ID)
+		return nil
+	}
+	if _, err := bot.Edit(c.Callback(), updateBtn); err != nil {
+		log.Printf("warn: failed to update captcha keyboard chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+	}
+
+	if status.SolvedCaptcha >= len(status.CaptchaAnswer) {
+		db.Delete(kvID)
+		c.Respond(&tele.CallbackResponse{Text: "Successfully joined.", ShowAlert: true})
+		if status.CaptchaMessage.ID > 0 {
+			if err := bot.Delete(&status.CaptchaMessage); err != nil {
+				log.Printf("warn: failed to delete solved captcha message chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+			}
+		}
+
+		chatMember, err := bot.ChatMemberOf(c.Chat(), c.Sender())
+		if err != nil {
+			log.Printf("warn: failed to load member state for unrestrict chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+			return nil
+		}
+		chatMember.Rights = tele.NoRestrictions()
+		if err := bot.Restrict(c.Chat(), chatMember); err != nil {
+			log.Printf("warn: failed to restore user permissions chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+		}
+		log.Printf("Captcha solved chat_id=%d user_id=%d solved=%d failed=%d", c.Chat().ID, c.Sender().ID, status.SolvedCaptcha, status.FailCaptcha)
+
+		return nil
+	}
+
+	return nil
 }
 
 func buildCaptchaChallenge(answerCount, decoyCount int) (captchaChallenge, error) {
@@ -508,159 +708,6 @@ func resolveAssetPath(relPath string) string {
 	return filepath.Clean(relPath)
 }
 
-func handleAnswer(c tele.Context) error {
-	if c.Chat().Type == tele.ChatPrivate {
-		return nil
-	}
-	if !isContextAuthorized(c) {
-		logAccessDenied(c, "callback")
-		return nil
-	}
-
-	// kvID is combination of user id and chat id
-	kvID := fmt.Sprintf("%v-%v", c.Callback().Sender.ID, c.Chat().ID)
-
-	messageID := c.Callback().Message.ID
-	answer := strings.TrimSpace(c.Callback().Data)
-	answer = strings.Split(answer, "|")[0]
-
-	status := captcha.JoinStatus{}
-	if data, found := db.Get(kvID); !found {
-		c.Respond(&tele.CallbackResponse{Text: "This challenge is not for you."})
-		log.Printf("Answer rejected (missing challenge) chat_id=%d user_id=%d", c.Chat().ID, c.Callback().Sender.ID)
-		return nil
-	} else {
-		status = data.(captcha.JoinStatus)
-	}
-
-	if messageID != status.CaptchaMessage.ID {
-		c.Respond(&tele.CallbackResponse{Text: "This challenge is not for you."})
-		log.Printf("Answer rejected (message mismatch) chat_id=%d user_id=%d got_message_id=%d expected_message_id=%d", c.Chat().ID, c.Callback().Sender.ID, messageID, status.CaptchaMessage.ID)
-		return nil
-	}
-
-	correct, expected := isNextCaptchaAnswer(status, answer)
-	if correct {
-		status.SolvedCaptcha++
-	} else {
-		status.FailCaptcha++
-		db.Update(kvID, status)
-		log.Printf(
-			"Answer rejected (wrong sequence) chat_id=%d user_id=%d got=%q expected=%q solved=%d total=%d",
-			c.Chat().ID,
-			c.Callback().Sender.ID,
-			answer,
-			expected,
-			status.SolvedCaptcha,
-			len(status.CaptchaAnswer),
-		)
-
-		if status.FailCaptcha >= cfg.Captcha.MaxFailures {
-			db.Delete(kvID)
-			c.Respond(&tele.CallbackResponse{Text: "Captcha failed, you have been banned, please contact admin with your another account.", ShowAlert: true})
-			if err := bot.Delete(&status.CaptchaMessage); err != nil {
-				log.Printf("warn: failed to delete failed captcha message chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
-			}
-			if err := bot.Ban(c.Chat(), &tele.ChatMember{User: c.Sender()}, false); err != nil {
-				log.Printf("warn: failed to ban failed captcha user chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
-			}
-
-			mention := fmt.Sprintf(`[%v](tg://user?id=%v)`, status.UserFullName, status.UserID)
-			msg := "Captcha failed, %v has been banned, please contact administrator if %v are real human with non-automated account"
-			msg += "\n\n this message will automatically removed in %s..."
-			msg = fmt.Sprintf(msg, mention, mention, humanizeDuration(cfg.Captcha.FailureNoticeTTL))
-			msgr, err := sendWithConfiguredTopic(status.CaptchaMessage.Chat, msg, tele.ModeMarkdown, nil)
-			if err == nil {
-				go func(msgr *tele.Message) {
-					time.Sleep(cfg.Captcha.FailureNoticeTTL)
-					if err := bot.Delete(msgr); err != nil {
-						log.Printf("warn: failed to delete failure notice message chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
-					}
-				}(msgr)
-			} else {
-				log.Printf("warn: failed to send failure notice chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
-			}
-			log.Printf("Captcha failed chat_id=%d user_id=%d solved=%d failed=%d", c.Chat().ID, c.Sender().ID, status.SolvedCaptcha, status.FailCaptcha)
-			return nil
-		}
-
-		challenge, err := buildCaptchaChallenge(captchaAnswerCount, captchaDecoyCount)
-		if err != nil {
-			log.Printf("error: failed to regenerate captcha challenge chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
-			c.Respond(&tele.CallbackResponse{Text: "Wrong sequence. Please continue with the current puzzle.", ShowAlert: true})
-			return nil
-		}
-
-		file := tele.FromReader(bytes.NewReader(challenge.ImageBytes))
-		photo := &tele.Photo{File: file}
-		photo.Caption = genCaption(c.Sender())
-
-		newMsg, err := sendWithConfiguredTopic(c.Chat(), photo, tele.ModeMarkdown, challenge.Markup)
-		if err != nil {
-			log.Printf("error: failed to send regenerated captcha challenge chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
-			c.Respond(&tele.CallbackResponse{Text: "Wrong sequence. Please continue with the current puzzle.", ShowAlert: true})
-			return nil
-		}
-
-		oldMessage := status.CaptchaMessage
-		applyCaptchaChallenge(&status, challenge, *newMsg)
-		db.Update(kvID, status)
-		if err := bot.Delete(&oldMessage); err != nil {
-			log.Printf("warn: failed to delete previous captcha message chat_id=%d user_id=%d message_id=%d err=%v", c.Chat().ID, c.Sender().ID, oldMessage.ID, err)
-		}
-		c.Respond(&tele.CallbackResponse{Text: "Wrong sequence. A new puzzle has been generated.", ShowAlert: true})
-		log.Printf("Captcha regenerated chat_id=%d user_id=%d old_message_id=%d new_message_id=%d failed=%d", c.Chat().ID, c.Sender().ID, oldMessage.ID, newMsg.ID, status.FailCaptcha)
-		return nil
-	}
-
-	newButtons := make([]tele.InlineButton, 0)
-	for _, button := range status.Buttons {
-		if button.Unique == answer {
-			if correct {
-				button.Text = "✅"
-			} else {
-				button.Text = "❌"
-			}
-		}
-		newButtons = append(newButtons, button)
-	}
-	status.Buttons = newButtons
-
-	db.Update(kvID, status)
-
-	updateBtn := captchaMarkupFromButtons(newButtons)
-	if len(newButtons) == 0 {
-		log.Printf("warn: no captcha buttons available for update chat_id=%d user_id=%d", c.Chat().ID, c.Sender().ID)
-		return nil
-	}
-	if _, err := bot.Edit(c.Callback(), updateBtn); err != nil {
-		log.Printf("warn: failed to update captcha keyboard chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
-	}
-
-	if status.SolvedCaptcha >= len(status.CaptchaAnswer) {
-		db.Delete(kvID)
-		c.Respond(&tele.CallbackResponse{Text: "Successfully joined.", ShowAlert: true})
-		if err := bot.Delete(&status.CaptchaMessage); err != nil {
-			log.Printf("warn: failed to delete solved captcha message chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
-		}
-
-		chatMember, err := bot.ChatMemberOf(c.Chat(), c.Sender())
-		if err != nil {
-			log.Printf("warn: failed to load member state for unrestrict chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
-			return nil
-		}
-		chatMember.Rights = tele.NoRestrictions()
-		if err := bot.Restrict(c.Chat(), chatMember); err != nil {
-			log.Printf("warn: failed to restore user permissions chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
-		}
-		log.Printf("Captcha solved chat_id=%d user_id=%d solved=%d failed=%d", c.Chat().ID, c.Sender().ID, status.SolvedCaptcha, status.FailCaptcha)
-
-		return nil
-	}
-
-	return nil
-}
-
 func isNextCaptchaAnswer(status captcha.JoinStatus, answer string) (bool, string) {
 	if status.SolvedCaptcha < 0 || status.SolvedCaptcha >= len(status.CaptchaAnswer) {
 		return false, ""
@@ -676,7 +723,11 @@ func onEvicted(key string, value interface{}) {
 		msg := "Captcha failed, %v has been banned, please contact administrator if %v are real human with non-automated account"
 		msg += "\n\n this message will automatically removed in %s..."
 		msg = fmt.Sprintf(msg, mention, mention, humanizeDuration(cfg.Captcha.FailureNoticeTTL))
-		msgr, err := sendWithConfiguredTopic(val.CaptchaMessage.Chat, msg, tele.ModeMarkdown, nil)
+		targetChat := val.CaptchaMessage.Chat
+		if targetChat == nil {
+			targetChat = &tele.Chat{ID: val.ChatID}
+		}
+		msgr, err := sendWithConfiguredTopic(targetChat, msg, tele.ModeMarkdown, nil)
 		if err == nil {
 			go func(msgr *tele.Message) {
 				time.Sleep(cfg.Captcha.FailureNoticeTTL)
@@ -688,10 +739,12 @@ func onEvicted(key string, value interface{}) {
 			log.Printf("warn: failed to send eviction notice chat_id=%d user_id=%d err=%v", val.ChatID, val.UserID, err)
 		}
 
-		if err := bot.Delete(&val.CaptchaMessage); err != nil {
-			log.Printf("warn: failed to delete expired captcha message chat_id=%d user_id=%d err=%v", val.ChatID, val.UserID, err)
+		if val.CaptchaMessage.ID > 0 {
+			if err := bot.Delete(&val.CaptchaMessage); err != nil {
+				log.Printf("warn: failed to delete expired captcha message chat_id=%d user_id=%d err=%v", val.ChatID, val.UserID, err)
+			}
 		}
-		if err := bot.Ban(val.CaptchaMessage.Chat, &tele.ChatMember{User: &tele.User{ID: val.UserID}}, false); err != nil {
+		if err := bot.Ban(targetChat, &tele.ChatMember{User: &tele.User{ID: val.UserID}}, false); err != nil {
 			log.Printf("warn: failed to ban user after captcha expiry chat_id=%d user_id=%d err=%v", val.ChatID, val.UserID, err)
 		}
 	}

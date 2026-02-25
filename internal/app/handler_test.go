@@ -384,3 +384,90 @@ func TestApplyCaptchaRestriction(t *testing.T) {
 		t.Fatalf("rights = %+v, want %+v", member.Rights, tele.NoRights())
 	}
 }
+
+func TestBindCaptchaMessageIfUnset(t *testing.T) {
+	t.Parallel()
+
+	t.Run("binds when message id is unknown", func(t *testing.T) {
+		t.Parallel()
+
+		status := &captcha.JoinStatus{}
+		msg := &tele.Message{
+			ID:   55,
+			Chat: &tele.Chat{ID: -1001},
+		}
+
+		changed := bindCaptchaMessageIfUnset(status, msg)
+		if !changed {
+			t.Fatalf("expected bind to report changed=true")
+		}
+		if status.CaptchaMessage.ID != 55 {
+			t.Fatalf("captcha message id = %d, want 55", status.CaptchaMessage.ID)
+		}
+	})
+
+	t.Run("does not overwrite when already bound", func(t *testing.T) {
+		t.Parallel()
+
+		status := &captcha.JoinStatus{
+			CaptchaMessage: tele.Message{ID: 10},
+		}
+		msg := &tele.Message{ID: 99}
+
+		changed := bindCaptchaMessageIfUnset(status, msg)
+		if changed {
+			t.Fatalf("expected bind to report changed=false")
+		}
+		if status.CaptchaMessage.ID != 10 {
+			t.Fatalf("captcha message id = %d, want 10", status.CaptchaMessage.ID)
+		}
+	})
+}
+
+func TestNewJoinStatus(t *testing.T) {
+	t.Parallel()
+
+	user := &tele.User{
+		ID:        42,
+		FirstName: "Alice",
+		LastName:  "Bob",
+	}
+	chat := &tele.Chat{ID: -100123}
+	challenge := captchaChallenge{
+		AnswerKeys: []string{"u1", "u2", "u3", "u4"},
+		Buttons: []tele.InlineButton{
+			{Unique: "u1"},
+			{Unique: "u2"},
+		},
+	}
+	message := tele.Message{
+		ID:   77,
+		Chat: chat,
+	}
+
+	status := newJoinStatus(user, chat, challenge, message)
+	if status.UserID != 42 {
+		t.Fatalf("user id = %d, want 42", status.UserID)
+	}
+	if status.ChatID != -100123 {
+		t.Fatalf("chat id = %d, want -100123", status.ChatID)
+	}
+	if status.CaptchaMessage.ID != 77 {
+		t.Fatalf("captcha message id = %d, want 77", status.CaptchaMessage.ID)
+	}
+	if status.UserFullName != "Alice Bob" {
+		t.Fatalf("user full name = %q, want %q", status.UserFullName, "Alice Bob")
+	}
+	if len(status.CaptchaAnswer) != 4 {
+		t.Fatalf("captcha answer count = %d, want 4", len(status.CaptchaAnswer))
+	}
+}
+
+func TestCaptchaSendTimeoutMarker(t *testing.T) {
+	t.Parallel()
+
+	wrapped := fmt.Errorf("%w: %v", errCaptchaSendTimeout, context.DeadlineExceeded)
+	if !errors.Is(wrapped, errCaptchaSendTimeout) {
+		t.Fatalf("expected wrapped error to match errCaptchaSendTimeout")
+	}
+}
