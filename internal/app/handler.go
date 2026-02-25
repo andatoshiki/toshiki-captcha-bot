@@ -2,10 +2,13 @@ package app
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"image/jpeg"
 	"log"
 	"math/rand"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,51 +211,157 @@ func onJoin(c tele.Context) error {
 		return nil
 	}
 
+	chatMember, err := bot.ChatMemberOf(c.Chat(), c.Sender())
+	if err != nil {
+		log.Printf("warn: failed to load member state for restriction chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+		return nil
+	}
+	originalMember := *chatMember
+	applyCaptchaRestriction(chatMember, cfg.Captcha.Expiration)
+	if err := bot.Restrict(c.Chat(), chatMember); err != nil {
+		log.Printf("warn: failed to restrict user chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+		return nil
+	}
+	log.Printf("User restricted pending captcha chat_id=%d user_id=%d until=%d", c.Chat().ID, c.Sender().ID, chatMember.RestrictedUntil)
+
 	challenge, err := buildCaptchaChallenge(captchaAnswerCount, captchaDecoyCount)
 	if err != nil {
 		log.Printf("error: captcha generation failed chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+		restoreUserRestriction(c.Chat(), c.Sender(), &originalMember, "captcha_generation_failed")
 		return nil
 	}
 
-	file := tele.FromReader(bytes.NewReader(challenge.ImageBytes))
-	photo := &tele.Photo{File: file}
-	photo.Caption = genCaption(c.Sender())
-
-	msg, err := sendWithConfiguredTopic(c.Chat(), photo, tele.ModeMarkdown, challenge.Markup)
-	if err == nil {
-		status := captcha.JoinStatus{
-			UserID: c.Sender().ID,
-			ChatID: c.Chat().ID,
-		}
-		applyCaptchaChallenge(&status, challenge, *msg)
-
-		status.UserFullName = c.Sender().FirstName + " " + c.Sender().LastName
-		status.UserFullName = sanitizeName(status.UserFullName)
-
-		db.Set(kvID, status, cfg.Captcha.Expiration)
-		log.Printf(
-			"Captcha issued chat_id=%d user_id=%d challenge_message_id=%d answer_count=%d topic_thread_id=%d",
-			c.Chat().ID,
-			c.Sender().ID,
-			msg.ID,
-			len(status.CaptchaAnswer),
-			topicThreadIDForChat(c.Chat()),
-		)
-
-		chatMember, err := bot.ChatMemberOf(c.Chat(), c.Sender())
-		if err != nil {
-			log.Printf("warn: failed to load member state for restriction chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
-			return nil
-		}
-		chatMember.RestrictedUntil = time.Now().Add(cfg.Captcha.Expiration).Unix()
-		if err := bot.Restrict(c.Chat(), chatMember); err != nil {
-			log.Printf("warn: failed to restrict user chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
-		}
-	} else {
+	msg, err := sendCaptchaChallengeWithRetry(c.Chat(), c.Sender(), challenge.ImageBytes, genCaption(c.Sender()), challenge.Markup)
+	if err != nil {
 		log.Printf("error: failed to send captcha challenge chat_id=%d user_id=%d err=%v", c.Chat().ID, c.Sender().ID, err)
+		restoreUserRestriction(c.Chat(), c.Sender(), &originalMember, "captcha_send_failed")
+		return nil
 	}
 
+	status := captcha.JoinStatus{
+		UserID: c.Sender().ID,
+		ChatID: c.Chat().ID,
+	}
+	applyCaptchaChallenge(&status, challenge, *msg)
+
+	status.UserFullName = c.Sender().FirstName + " " + c.Sender().LastName
+	status.UserFullName = sanitizeName(status.UserFullName)
+
+	db.Set(kvID, status, cfg.Captcha.Expiration)
+	log.Printf(
+		"Captcha issued chat_id=%d user_id=%d challenge_message_id=%d answer_count=%d topic_thread_id=%d",
+		c.Chat().ID,
+		c.Sender().ID,
+		msg.ID,
+		len(status.CaptchaAnswer),
+		topicThreadIDForChat(c.Chat()),
+	)
+
 	return nil
+}
+
+func applyCaptchaRestriction(member *tele.ChatMember, duration time.Duration) {
+	if member == nil {
+		return
+	}
+	member.Rights = tele.NoRights()
+	member.RestrictedUntil = time.Now().Add(duration).Unix()
+}
+
+func restoreUserRestriction(chat *tele.Chat, user *tele.User, member *tele.ChatMember, reason string) {
+	if chat == nil || user == nil || member == nil {
+		return
+	}
+	if bot == nil {
+		log.Printf(
+			"warn: restore skipped reason=bot_not_initialized chat_id=%d user_id=%d restore_reason=%s",
+			chat.ID,
+			user.ID,
+			reason,
+		)
+		return
+	}
+	if member.User == nil {
+		member.User = user
+	}
+	if err := bot.Restrict(chat, member); err != nil {
+		log.Printf(
+			"warn: failed to restore user restriction state chat_id=%d user_id=%d reason=%s err=%v",
+			chat.ID,
+			user.ID,
+			reason,
+			err,
+		)
+		return
+	}
+	log.Printf(
+		"User restriction state restored chat_id=%d user_id=%d reason=%s",
+		chat.ID,
+		user.ID,
+		reason,
+	)
+}
+
+func sendCaptchaChallengeWithRetry(chat *tele.Chat, user *tele.User, imageBytes []byte, caption string, markup *tele.ReplyMarkup) (*tele.Message, error) {
+	const maxAttempts = 3
+	var lastErr error
+
+	chatID := int64(0)
+	userID := int64(0)
+	if chat != nil {
+		chatID = chat.ID
+	}
+	if user != nil {
+		userID = user.ID
+	}
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		file := tele.FromReader(bytes.NewReader(imageBytes))
+		photo := &tele.Photo{File: file}
+		photo.Caption = caption
+
+		msg, err := sendWithConfiguredTopic(chat, photo, tele.ModeMarkdown, markup)
+		if err == nil {
+			if attempt > 1 {
+				log.Printf("Captcha challenge send recovered chat_id=%d user_id=%d attempt=%d", chatID, userID, attempt)
+			}
+			return msg, nil
+		}
+
+		lastErr = err
+		if !isTimeoutLikeError(err) || attempt == maxAttempts {
+			break
+		}
+
+		backoff := time.Duration(attempt) * time.Second
+		log.Printf(
+			"warn: captcha challenge send timeout chat_id=%d user_id=%d attempt=%d next_retry_in=%s err=%v",
+			chatID,
+			userID,
+			attempt,
+			backoff,
+			err,
+		)
+		time.Sleep(backoff)
+	}
+
+	return nil, lastErr
+}
+
+func isTimeoutLikeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "context deadline exceeded") ||
+		strings.Contains(lower, "client.timeout exceeded while awaiting headers")
 }
 
 func buildCaptchaChallenge(answerCount, decoyCount int) (captchaChallenge, error) {
