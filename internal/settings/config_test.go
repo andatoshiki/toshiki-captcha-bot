@@ -1,11 +1,10 @@
-package app
+package settings
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestRuntimeConfigValidate(t *testing.T) {
@@ -13,7 +12,7 @@ func TestRuntimeConfigValidate(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		mutate  func(*runtimeConfig)
+		mutate  func(*RuntimeConfig)
 		wantErr string
 	}{
 		{
@@ -21,30 +20,30 @@ func TestRuntimeConfigValidate(t *testing.T) {
 		},
 		{
 			name: "missing bot token",
-			mutate: func(cfg *runtimeConfig) {
+			mutate: func(cfg *RuntimeConfig) {
 				cfg.Bot.Token = ""
 			},
 			wantErr: "bot.token is required",
 		},
 		{
 			name: "invalid poll timeout",
-			mutate: func(cfg *runtimeConfig) {
+			mutate: func(cfg *RuntimeConfig) {
 				cfg.Bot.PollTimeout = 0
 			},
 			wantErr: "bot.poll_timeout",
 		},
 		{
 			name: "invalid admin user id",
-			mutate: func(cfg *runtimeConfig) {
+			mutate: func(cfg *RuntimeConfig) {
 				cfg.Bot.AdminUserIDs = []int64{0}
 			},
 			wantErr: "bot.admin_user_ids must contain positive integers",
 		},
 		{
 			name: "private mode with valid groups",
-			mutate: func(cfg *runtimeConfig) {
+			mutate: func(cfg *RuntimeConfig) {
 				cfg.Bot.AdminUserIDs = []int64{1001}
-				cfg.Groups = []groupTopicConfig{
+				cfg.Groups = []GroupTopicConfig{
 					{ID: "@somegroup", Topic: 9},
 					{ID: "anothergroup", Topic: 0},
 				}
@@ -52,9 +51,9 @@ func TestRuntimeConfigValidate(t *testing.T) {
 		},
 		{
 			name: "private mode invalid group username",
-			mutate: func(cfg *runtimeConfig) {
+			mutate: func(cfg *RuntimeConfig) {
 				cfg.Bot.AdminUserIDs = []int64{1001}
-				cfg.Groups = []groupTopicConfig{
+				cfg.Groups = []GroupTopicConfig{
 					{ID: "bad group name", Topic: 1},
 				}
 			},
@@ -62,9 +61,9 @@ func TestRuntimeConfigValidate(t *testing.T) {
 		},
 		{
 			name: "private mode duplicate groups",
-			mutate: func(cfg *runtimeConfig) {
+			mutate: func(cfg *RuntimeConfig) {
 				cfg.Bot.AdminUserIDs = []int64{1001}
-				cfg.Groups = []groupTopicConfig{
+				cfg.Groups = []GroupTopicConfig{
 					{ID: "@samegroup", Topic: 1},
 					{ID: "samegroup", Topic: 2},
 				}
@@ -73,9 +72,9 @@ func TestRuntimeConfigValidate(t *testing.T) {
 		},
 		{
 			name: "private mode invalid topic",
-			mutate: func(cfg *runtimeConfig) {
+			mutate: func(cfg *RuntimeConfig) {
 				cfg.Bot.AdminUserIDs = []int64{1001}
-				cfg.Groups = []groupTopicConfig{
+				cfg.Groups = []GroupTopicConfig{
 					{ID: "@somegroup", Topic: -1},
 				}
 			},
@@ -83,36 +82,36 @@ func TestRuntimeConfigValidate(t *testing.T) {
 		},
 		{
 			name: "public mode discards groups config",
-			mutate: func(cfg *runtimeConfig) {
-				cfg.Groups = []groupTopicConfig{
+			mutate: func(cfg *RuntimeConfig) {
+				cfg.Groups = []GroupTopicConfig{
 					{ID: "invalid group id with spaces", Topic: 99},
 				}
 			},
 		},
 		{
 			name: "invalid expiration",
-			mutate: func(cfg *runtimeConfig) {
+			mutate: func(cfg *RuntimeConfig) {
 				cfg.Captcha.Expiration = 0
 			},
 			wantErr: "captcha.expiration",
 		},
 		{
 			name: "invalid cleanup interval",
-			mutate: func(cfg *runtimeConfig) {
+			mutate: func(cfg *RuntimeConfig) {
 				cfg.Captcha.CleanupInterval = 0
 			},
 			wantErr: "captcha.cleanup_interval",
 		},
 		{
 			name: "invalid max failures",
-			mutate: func(cfg *runtimeConfig) {
+			mutate: func(cfg *RuntimeConfig) {
 				cfg.Captcha.MaxFailures = 0
 			},
 			wantErr: "captcha.max_failures",
 		},
 		{
 			name: "invalid failure notice ttl",
-			mutate: func(cfg *runtimeConfig) {
+			mutate: func(cfg *RuntimeConfig) {
 				cfg.Captcha.FailureNoticeTTL = 0
 			},
 			wantErr: "captcha.failure_notice_ttl",
@@ -124,13 +123,13 @@ func TestRuntimeConfigValidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := defaultRuntimeConfig()
+			cfg := DefaultRuntimeConfig()
 			cfg.Bot.Token = "test-token"
 			if tt.mutate != nil {
 				tt.mutate(&cfg)
 			}
 
-			err := cfg.validate()
+			err := cfg.Validate()
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatalf("validate returned error: %v", err)
@@ -161,12 +160,12 @@ func TestLoadConfig(t *testing.T) {
 			t.Fatalf("write config file: %v", err)
 		}
 
-		cfg, err := loadConfig(path)
+		cfg, err := Load(path)
 		if err != nil {
-			t.Fatalf("loadConfig returned error: %v", err)
+			t.Fatalf("Load returned error: %v", err)
 		}
 
-		want := defaultRuntimeConfig()
+		want := DefaultRuntimeConfig()
 		if cfg.Bot.Token != "test-token" {
 			t.Fatalf("Bot.Token = %q, want %q", cfg.Bot.Token, "test-token")
 		}
@@ -179,8 +178,8 @@ func TestLoadConfig(t *testing.T) {
 		if len(cfg.Bot.adminUsers) != 0 {
 			t.Fatalf("Bot.adminUsers length = %d, want 0", len(cfg.Bot.adminUsers))
 		}
-		if !cfg.isPublicMode() {
-			t.Fatalf("isPublicMode = false, want true")
+		if !cfg.IsPublicMode() {
+			t.Fatalf("IsPublicMode = false, want true")
 		}
 		if len(cfg.Groups) != 0 {
 			t.Fatalf("Groups length = %d, want 0", len(cfg.Groups))
@@ -229,13 +228,13 @@ func TestLoadConfig(t *testing.T) {
 			t.Fatalf("write config file: %v", err)
 		}
 
-		cfg, err := loadConfig(path)
+		cfg, err := Load(path)
 		if err != nil {
-			t.Fatalf("loadConfig returned error: %v", err)
+			t.Fatalf("Load returned error: %v", err)
 		}
 
-		if cfg.isPublicMode() {
-			t.Fatalf("isPublicMode = true, want false")
+		if cfg.IsPublicMode() {
+			t.Fatalf("IsPublicMode = true, want false")
 		}
 		if len(cfg.Bot.adminUsers) != 2 {
 			t.Fatalf("Bot.adminUsers length = %d, want 2", len(cfg.Bot.adminUsers))
@@ -290,13 +289,13 @@ func TestLoadConfig(t *testing.T) {
 			t.Fatalf("write config file: %v", err)
 		}
 
-		cfg, err := loadConfig(path)
+		cfg, err := Load(path)
 		if err != nil {
-			t.Fatalf("loadConfig returned error: %v", err)
+			t.Fatalf("Load returned error: %v", err)
 		}
 
-		if !cfg.isPublicMode() {
-			t.Fatalf("isPublicMode = false, want true")
+		if !cfg.IsPublicMode() {
+			t.Fatalf("IsPublicMode = false, want true")
 		}
 		if len(cfg.Groups) != 0 {
 			t.Fatalf("Groups length = %d, want 0", len(cfg.Groups))
@@ -360,7 +359,7 @@ func TestLoadConfig(t *testing.T) {
 				t.Fatalf("write config file: %v", err)
 			}
 
-			_, err := loadConfig(path)
+			_, err := Load(path)
 			if err == nil {
 				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
 			}
@@ -417,10 +416,10 @@ func TestNormalizePublicGroupID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := normalizePublicGroupID(tt.input)
+			got, err := NormalizePublicGroupID(tt.input)
 			if tt.wantErr == "" {
 				if err != nil {
-					t.Fatalf("normalizePublicGroupID returned error: %v", err)
+					t.Fatalf("NormalizePublicGroupID returned error: %v", err)
 				}
 				if got != tt.want {
 					t.Fatalf("normalized id = %q, want %q", got, tt.want)
@@ -433,44 +432,6 @@ func TestNormalizePublicGroupID(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestHumanizeDuration(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		in   time.Duration
-		want string
-	}{
-		{
-			name: "seconds",
-			in:   15 * time.Second,
-			want: "15 seconds",
-		},
-		{
-			name: "minutes",
-			in:   2 * time.Minute,
-			want: "2 minutes",
-		},
-		{
-			name: "hours",
-			in:   3 * time.Hour,
-			want: "3 hours",
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := humanizeDuration(tt.in)
-			if got != tt.want {
-				t.Fatalf("humanizeDuration(%v) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}

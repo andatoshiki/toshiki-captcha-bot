@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tele "gopkg.in/telebot.v3"
+	"toshiki-captcha-bot/internal/settings"
 )
 
 func genCaption(user *tele.User) string {
@@ -87,22 +88,13 @@ func topicThreadIDForChat(chat *tele.Chat) int {
 	return resolveTopicThreadIDForChat(chat, cfg)
 }
 
-func resolveTopicThreadIDForChat(chat *tele.Chat, config runtimeConfig) int {
+func resolveTopicThreadIDForChat(chat *tele.Chat, config settings.RuntimeConfig) int {
 	if chat == nil || chat.Type == tele.ChatPrivate {
 		return 0
 	}
 
 	// Public mode discards all groups topic configuration by design.
-	if config.isPublicMode() {
-		return 0
-	}
-
-	groupID := normalizePublicGroupLookupID(chat.Username)
-	if groupID == "" {
-		return 0
-	}
-
-	return config.groupTopics[groupID]
+	return config.TopicForChatUsername(chat.Username)
 }
 
 func sendWithConfiguredTopic(chat *tele.Chat, what interface{}, parseMode tele.ParseMode, markup *tele.ReplyMarkup) (*tele.Message, error) {

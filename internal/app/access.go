@@ -3,63 +3,21 @@ package app
 import (
 	"fmt"
 	"log"
-	"strings"
 
 	tele "gopkg.in/telebot.v3"
+	"toshiki-captcha-bot/internal/policy"
 )
 
 func isGroupChat(chat *tele.Chat) bool {
-	if chat == nil {
-		return false
-	}
-	return chat.Type == tele.ChatGroup || chat.Type == tele.ChatSuperGroup
+	return policy.IsGroupChat(chat)
 }
 
 func isPublicGroupChat(chat *tele.Chat) bool {
-	if !isGroupChat(chat) {
-		return false
-	}
-	return strings.TrimSpace(chat.Username) != ""
-}
-
-func isAllowedGroupChat(chat *tele.Chat) bool {
-	return isAllowedGroupChatWithConfig(chat, cfg)
-}
-
-func isAllowedGroupChatWithConfig(chat *tele.Chat, config runtimeConfig) bool {
-	if !isGroupChat(chat) {
-		return false
-	}
-	if !isPublicGroupChat(chat) {
-		return false
-	}
-	if config.isPublicMode() {
-		return true
-	}
-
-	groupID := normalizePublicGroupLookupID(chat.Username)
-	if groupID == "" {
-		return false
-	}
-	_, ok := config.groupAllow[groupID]
-	return ok
+	return policy.IsPublicGroupChat(chat)
 }
 
 func isAllowedCommandChat(chat *tele.Chat) bool {
-	return isAllowedCommandChatWithConfig(chat, cfg)
-}
-
-func isAllowedCommandChatWithConfig(chat *tele.Chat, config runtimeConfig) bool {
-	if chat == nil {
-		return false
-	}
-	if chat.Type == tele.ChatPrivate {
-		return true
-	}
-	if isGroupChat(chat) {
-		return isAllowedGroupChatWithConfig(chat, config)
-	}
-	return false
+	return policy.IsAllowedCommandChat(chat, cfg)
 }
 
 func leaveChat(chat *tele.Chat, reason string) {
@@ -76,7 +34,7 @@ func leaveChat(chat *tele.Chat, reason string) {
 }
 
 func leaveIfUnsupportedPrivateGroup(chat *tele.Chat, trigger string) bool {
-	if !isGroupChat(chat) || isPublicGroupChat(chat) {
+	if !policy.IsGroupChat(chat) || policy.IsPublicGroupChat(chat) {
 		return false
 	}
 	log.Printf("Unsupported chat type for captcha bot chat_id=%d chat_type=%s trigger=%s reason=private_group_without_username", chat.ID, chat.Type, trigger)
@@ -88,29 +46,14 @@ func isContextAuthorized(c tele.Context) bool {
 	if c == nil || c.Chat() == nil {
 		return false
 	}
-	return isAuthorizedGroupChatWithConfig(c.Chat(), cfg)
-}
-
-func isAuthorizedGroupChatWithConfig(chat *tele.Chat, config runtimeConfig) bool {
-	if !isGroupChat(chat) {
-		return false
-	}
-	return isAllowedGroupChatWithConfig(chat, config)
-}
-
-func isAllowedUserID(userID int64) bool {
-	if userID <= 0 {
-		return false
-	}
-	_, ok := cfg.Bot.adminUsers[userID]
-	return ok
+	return policy.IsAuthorizedGroupChat(c.Chat(), cfg)
 }
 
 func isSenderAllowed(c tele.Context) bool {
 	if c == nil || c.Sender() == nil {
 		return false
 	}
-	return isAllowedUserID(c.Sender().ID)
+	return policy.IsAllowedUserID(c.Sender().ID, cfg)
 }
 
 func logAccessDenied(c tele.Context, event string) {
@@ -122,7 +65,7 @@ func logAccessDenied(c tele.Context, event string) {
 	if c != nil && c.Sender() != nil {
 		userID = c.Sender().ID
 	}
-	log.Printf("Access denied event=%s chat_id=%d user_id=%d public_mode=%t", event, chatID, userID, cfg.isPublicMode())
+	log.Printf("Access denied event=%s chat_id=%d user_id=%d public_mode=%t", event, chatID, userID, cfg.IsPublicMode())
 }
 
 func onAddedToGroup(c tele.Context) error {

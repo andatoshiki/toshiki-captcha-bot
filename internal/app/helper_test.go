@@ -5,7 +5,17 @@ import (
 	"testing"
 
 	tele "gopkg.in/telebot.v3"
+	"toshiki-captcha-bot/internal/settings"
 )
+
+func mustValidatedRuntimeConfig(t *testing.T, cfg settings.RuntimeConfig) settings.RuntimeConfig {
+	t.Helper()
+	cfg.Bot.Token = "test-token"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+	return cfg
+}
 
 func TestBuildSendOptionsWithTopic(t *testing.T) {
 	t.Parallel()
@@ -59,49 +69,47 @@ func TestTopicThreadIDForChat(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		cfg    runtimeConfig
+		cfg    settings.RuntimeConfig
 		chat   *tele.Chat
 		wantID int
 	}{
 		{
 			name:   "nil chat falls back to root",
-			cfg:    runtimeConfig{},
+			cfg:    settings.RuntimeConfig{},
 			chat:   nil,
 			wantID: 0,
 		},
 		{
 			name:   "private chat ignores configured topic",
-			cfg:    runtimeConfig{},
+			cfg:    settings.RuntimeConfig{},
 			chat:   &tele.Chat{Type: tele.ChatPrivate},
 			wantID: 0,
 		},
 		{
-			name: "public mode discards groups topic mapping",
-			cfg: runtimeConfig{
-				groupTopics: map[string]int{"somegroup": 42},
-			},
+			name:   "public mode discards groups topic mapping",
+			cfg:    mustValidatedRuntimeConfig(t, settings.DefaultRuntimeConfig()),
 			chat:   &tele.Chat{Type: tele.ChatSuperGroup, Username: "somegroup"},
 			wantID: 0,
 		},
 		{
 			name: "private mode resolves configured topic",
-			cfg: runtimeConfig{
-				Bot: botConfig{
-					adminUsers: map[int64]struct{}{1001: {}},
-				},
-				groupTopics: map[string]int{"somegroup": 42},
-			},
+			cfg: func(t *testing.T) settings.RuntimeConfig {
+				cfg := settings.DefaultRuntimeConfig()
+				cfg.Bot.AdminUserIDs = []int64{1001}
+				cfg.Groups = []settings.GroupTopicConfig{{ID: "@somegroup", Topic: 42}}
+				return mustValidatedRuntimeConfig(t, cfg)
+			}(t),
 			chat:   &tele.Chat{Type: tele.ChatSuperGroup, Username: "somegroup"},
 			wantID: 42,
 		},
 		{
 			name: "private mode returns root for unknown group",
-			cfg: runtimeConfig{
-				Bot: botConfig{
-					adminUsers: map[int64]struct{}{1001: {}},
-				},
-				groupTopics: map[string]int{"somegroup": 42},
-			},
+			cfg: func(t *testing.T) settings.RuntimeConfig {
+				cfg := settings.DefaultRuntimeConfig()
+				cfg.Bot.AdminUserIDs = []int64{1001}
+				cfg.Groups = []settings.GroupTopicConfig{{ID: "@somegroup", Topic: 42}}
+				return mustValidatedRuntimeConfig(t, cfg)
+			}(t),
 			chat:   &tele.Chat{Type: tele.ChatSuperGroup, Username: "othergroup"},
 			wantID: 0,
 		},
@@ -134,7 +142,7 @@ func TestGenCaptionEscapesDisplayName(t *testing.T) {
 	t.Parallel()
 
 	oldCfg := cfg
-	cfg = defaultRuntimeConfig()
+	cfg = mustValidatedRuntimeConfig(t, settings.DefaultRuntimeConfig())
 	t.Cleanup(func() {
 		cfg = oldCfg
 	})

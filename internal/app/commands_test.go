@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tele "gopkg.in/telebot.v3"
+	"toshiki-captcha-bot/internal/settings"
 )
 
 func TestHelpText(t *testing.T) {
@@ -104,14 +105,11 @@ func TestBuildAdminCommandScopesDedup(t *testing.T) {
 func TestSortedAdminUserIDs(t *testing.T) {
 	t.Parallel()
 
-	config := runtimeConfig{
-		Bot: botConfig{
-			adminUsers: map[int64]struct{}{
-				4002: {},
-				1001: {},
-				3003: {},
-			},
-		},
+	config := settings.DefaultRuntimeConfig()
+	config.Bot.Token = "test-token"
+	config.Bot.AdminUserIDs = []int64{4002, 1001, 3003}
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate returned error: %v", err)
 	}
 
 	got := sortedAdminUserIDs(config)

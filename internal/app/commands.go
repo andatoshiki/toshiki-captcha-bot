@@ -8,6 +8,7 @@ import (
 
 	tele "gopkg.in/telebot.v3"
 	"toshiki-captcha-bot/internal/commandscope"
+	"toshiki-captcha-bot/internal/settings"
 	"toshiki-captcha-bot/internal/version"
 )
 
@@ -116,15 +117,15 @@ func clearLegacyAdminCommandScopes(b *tele.Bot) {
 	log.Printf("Bot commands deleted legacy scope=%s", legacyScope.Type)
 }
 
-func desiredAdminCommandScopes(b *tele.Bot, config runtimeConfig) []tele.CommandScope {
+func desiredAdminCommandScopes(b *tele.Bot, config settings.RuntimeConfig) []tele.CommandScope {
 	adminIDs := sortedAdminUserIDs(config)
 	if len(adminIDs) == 0 {
 		return nil
 	}
 
 	groupChatIDs := []int64{}
-	if !config.isPublicMode() {
-		groupChatIDs = resolveConfiguredGroupChatIDs(b, config.Groups)
+	if !config.IsPublicMode() {
+		groupChatIDs = resolveConfiguredGroupChatIDs(b, config.GroupsList())
 	}
 
 	return buildAdminCommandScopes(adminIDs, groupChatIDs)
@@ -197,18 +198,15 @@ func adminBotCommands() []tele.Command {
 	}
 }
 
-func sortedAdminUserIDs(config runtimeConfig) []int64 {
-	ids := make([]int64, 0, len(config.Bot.adminUsers))
-	for userID := range config.Bot.adminUsers {
-		ids = append(ids, userID)
-	}
+func sortedAdminUserIDs(config settings.RuntimeConfig) []int64 {
+	ids := append([]int64(nil), config.Bot.AdminUserIDs...)
 	sort.Slice(ids, func(i, j int) bool {
 		return ids[i] < ids[j]
 	})
 	return ids
 }
 
-func resolveConfiguredGroupChatIDs(b *tele.Bot, groups []groupTopicConfig) []int64 {
+func resolveConfiguredGroupChatIDs(b *tele.Bot, groups []settings.GroupTopicConfig) []int64 {
 	ids := make([]int64, 0, len(groups))
 	seen := make(map[int64]struct{}, len(groups))
 	for _, group := range groups {
