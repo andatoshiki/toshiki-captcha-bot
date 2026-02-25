@@ -1,4 +1,4 @@
-package main
+package captcha
 
 import tele "gopkg.in/telebot.v3"
 

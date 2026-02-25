@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -11,15 +11,38 @@ import (
 
 	gim "github.com/codenoid/goimagemerge"
 	tele "gopkg.in/telebot.v3"
+	"toshiki-captcha-bot/internal/captcha"
 )
 
+type adminCommandResponder interface {
+	Chat() *tele.Chat
+	Sender() *tele.User
+	Send(what interface{}, opts ...interface{}) error
+}
+
 func onPing(c tele.Context) error {
-	if !isSenderAllowed(c) {
-		logAccessDenied(c, "ping_sender_not_allowed")
+	if c == nil || c.Chat() == nil {
+		log.Printf("warn: ping skipped reason=missing_chat_context")
 		return nil
 	}
-	if c.Chat() == nil {
-		log.Printf("warn: ping skipped reason=missing_chat_context")
+	if c.Sender() == nil {
+		log.Printf("warn: ping skipped reason=missing_sender chat_id=%d", c.Chat().ID)
+		return nil
+	}
+	if leaveIfUnsupportedPrivateGroup(c.Chat(), "ping") {
+		return nil
+	}
+	if !isAllowedCommandChat(c.Chat()) {
+		logAccessDenied(c, "ping_chat_not_allowed")
+		if isGroupChat(c.Chat()) {
+			leaveChat(c.Chat(), "unauthorized_group")
+		}
+		return nil
+	}
+
+	if !isSenderAllowed(c) {
+		logAccessDenied(c, "ping_sender_not_allowed")
+		respondAdminOnlyCommandDenied(c, "/ping")
 		return nil
 	}
 
@@ -49,7 +72,7 @@ func onPing(c tele.Context) error {
 		username,
 		messageID,
 		threadID,
-		cfg.Bot.TopicThreadID,
+		topicThreadIDForChat(c.Chat()),
 	)
 
 	start := time.Now()
@@ -83,19 +106,76 @@ func onPing(c tele.Context) error {
 }
 
 func onTestCaptcha(c tele.Context) error {
-	if !isSenderAllowedOrAdmin(c) {
-		logAccessDenied(c, "testcaptcha_sender_not_allowed")
+	if c == nil || c.Chat() == nil {
+		log.Printf("warn: testcaptcha skipped reason=missing_chat_context")
 		return nil
 	}
+	if c.Sender() == nil {
+		log.Printf("warn: testcaptcha skipped reason=missing_sender chat_id=%d", c.Chat().ID)
+		return nil
+	}
+	if leaveIfUnsupportedPrivateGroup(c.Chat(), "testcaptcha") {
+		return nil
+	}
+	if !isAllowedCommandChat(c.Chat()) {
+		logAccessDenied(c, "testcaptcha_chat_not_allowed")
+		if isGroupChat(c.Chat()) {
+			leaveChat(c.Chat(), "unauthorized_group")
+		}
+		return nil
+	}
+	if !isSenderAllowed(c) {
+		logAccessDenied(c, "testcaptcha_sender_not_allowed")
+		respondAdminOnlyCommandDenied(c, "/testcaptcha")
+		return nil
+	}
+	if c.Chat().Type == tele.ChatPrivate {
+		log.Printf("warn: testcaptcha skipped reason=private_chat_requires_group chat_id=%d user_id=%d", c.Chat().ID, c.Sender().ID)
+		return nil
+	}
+	log.Printf("Manual captcha trigger chat_id=%d user_id=%d", c.Chat().ID, c.Sender().ID)
 	return onJoin(c)
 }
 
+func respondAdminOnlyCommandDenied(c adminCommandResponder, command string) {
+	if c == nil || c.Chat() == nil || c.Sender() == nil {
+		return
+	}
+	if err := c.Send(adminOnlyCommandErrorText(command)); err != nil {
+		log.Printf(
+			"warn: failed to send unauthorized response command=%s chat_id=%d user_id=%d err=%v",
+			command,
+			c.Chat().ID,
+			c.Sender().ID,
+			err,
+		)
+	}
+}
+
 func onJoin(c tele.Context) error {
+	if c == nil || c.Chat() == nil {
+		return nil
+	}
+	if c.Sender() == nil {
+		log.Printf("warn: join skipped reason=missing_sender chat_id=%d", c.Chat().ID)
+		return nil
+	}
+	if c.Message() == nil {
+		log.Printf("warn: join skipped reason=missing_message chat_id=%d user_id=%d", c.Chat().ID, c.Sender().ID)
+		return nil
+	}
+
 	if c.Chat().Type == tele.ChatPrivate {
 		return nil
 	}
+
+	if leaveIfUnsupportedPrivateGroup(c.Chat(), "join") {
+		return nil
+	}
+
 	if !isContextAuthorized(c) {
 		logAccessDenied(c, "join")
+		leaveChat(c.Chat(), "unauthorized_group")
 		return nil
 	}
 
@@ -118,8 +198,8 @@ func onJoin(c tele.Context) error {
 	const decoyCount = 6
 	const challengeCount = answerCount + decoyCount
 
-	emojiKeys := make([]string, 0, len(emojis))
-	for key := range emojis {
+	emojiKeys := make([]string, 0, len(captcha.Emojis))
+	for key := range captcha.Emojis {
 		emojiKeys = append(emojiKeys, key)
 	}
 	if len(emojiKeys) < challengeCount {
@@ -172,7 +252,7 @@ func onJoin(c tele.Context) error {
 	buttons := make([]tele.InlineButton, 0)
 
 	for i, key := range challengeKeys {
-		emoji := emojis[key]
+		emoji := captcha.Emojis[key]
 		buttons = append(buttons, tele.InlineButton{Text: emoji, Unique: key})
 		if i < 5 {
 			btn1 = append(btn1, menu.Data(emoji, key))
@@ -201,7 +281,7 @@ func onJoin(c tele.Context) error {
 		for _, key := range answerKeys {
 			captchaAnswer = append(captchaAnswer, strings.TrimSpace(key))
 		}
-		status := JoinStatus{
+		status := captcha.JoinStatus{
 			UserID:         c.Sender().ID,
 			CaptchaAnswer:  captchaAnswer,
 			ChatID:         c.Chat().ID,
@@ -219,7 +299,7 @@ func onJoin(c tele.Context) error {
 			c.Sender().ID,
 			msg.ID,
 			len(captchaAnswer),
-			cfg.Bot.TopicThreadID,
+			topicThreadIDForChat(c.Chat()),
 		)
 
 		chatMember, err := bot.ChatMemberOf(c.Chat(), c.Sender())
@@ -254,13 +334,13 @@ func handleAnswer(c tele.Context) error {
 	answer := strings.TrimSpace(c.Callback().Data)
 	answer = strings.Split(answer, "|")[0]
 
-	status := JoinStatus{}
+	status := captcha.JoinStatus{}
 	if data, found := db.Get(kvID); !found {
 		c.Respond(&tele.CallbackResponse{Text: "This challenge is not for you."})
 		log.Printf("Answer rejected (missing challenge) chat_id=%d user_id=%d", c.Chat().ID, c.Callback().Sender.ID)
 		return nil
 	} else {
-		status = data.(JoinStatus)
+		status = data.(captcha.JoinStatus)
 	}
 
 	if messageID != status.CaptchaMessage.ID {
@@ -368,7 +448,7 @@ func handleAnswer(c tele.Context) error {
 	return nil
 }
 
-func isNextCaptchaAnswer(status JoinStatus, answer string) (bool, string) {
+func isNextCaptchaAnswer(status captcha.JoinStatus, answer string) (bool, string) {
 	if status.SolvedCaptcha < 0 || status.SolvedCaptcha >= len(status.CaptchaAnswer) {
 		return false, ""
 	}
@@ -377,7 +457,7 @@ func isNextCaptchaAnswer(status JoinStatus, answer string) (bool, string) {
 }
 
 func onEvicted(key string, value interface{}) {
-	if val, ok := value.(JoinStatus); ok {
+	if val, ok := value.(captcha.JoinStatus); ok {
 		log.Printf("Captcha expired chat_id=%d user_id=%d", val.ChatID, val.UserID)
 		mention := fmt.Sprintf(`[%v](tg://user?id=%v)`, val.UserFullName, val.UserID)
 		msg := "Captcha failed, %v has been banned, please contact administrator if %v are real human with non-automated account"

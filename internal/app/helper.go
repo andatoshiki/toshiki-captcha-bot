@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"fmt"
@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tele "gopkg.in/telebot.v3"
+	"toshiki-captcha-bot/internal/settings"
 )
 
 func genCaption(user *tele.User) string {
@@ -17,9 +18,31 @@ func genCaption(user *tele.User) string {
 		humanizeDuration(cfg.Captcha.Expiration),
 	)
 
-	mention := fmt.Sprintf(`[%v](tg://user?id=%v)`, user.FirstName, user.ID)
+	if user == nil {
+		return desc
+	}
+
+	displayName := strings.TrimSpace(user.FirstName)
+	if displayName == "" {
+		displayName = "user"
+	}
+	displayName = escapeTelegramMarkdown(displayName)
+
+	mention := fmt.Sprintf(`[%v](tg://user?id=%v)`, displayName, user.ID)
 	caption := fmt.Sprintf("%v, %v", mention, desc)
 	return caption
+}
+
+func escapeTelegramMarkdown(text string) string {
+	replacer := strings.NewReplacer(
+		"\\", "\\\\",
+		"_", "\\_",
+		"*", "\\*",
+		"[", "\\[",
+		"]", "\\]",
+		"`", "\\`",
+	)
+	return replacer.Replace(text)
 }
 
 func humanizeDuration(d time.Duration) string {
@@ -50,10 +73,6 @@ func humanizeDuration(d time.Duration) string {
 	return d.String()
 }
 
-func buildSendOptions(parseMode tele.ParseMode, markup *tele.ReplyMarkup) *tele.SendOptions {
-	return buildSendOptionsWithTopic(parseMode, markup, cfg.Bot.TopicThreadID)
-}
-
 func buildSendOptionsWithTopic(parseMode tele.ParseMode, markup *tele.ReplyMarkup, topicID int) *tele.SendOptions {
 	opts := &tele.SendOptions{
 		ParseMode: parseMode,
@@ -65,15 +84,21 @@ func buildSendOptionsWithTopic(parseMode tele.ParseMode, markup *tele.ReplyMarku
 	return opts
 }
 
-func topicThreadIDForChat(chat *tele.Chat, configuredThreadID int) int {
+func topicThreadIDForChat(chat *tele.Chat) int {
+	return resolveTopicThreadIDForChat(chat, cfg)
+}
+
+func resolveTopicThreadIDForChat(chat *tele.Chat, config settings.RuntimeConfig) int {
 	if chat == nil || chat.Type == tele.ChatPrivate {
 		return 0
 	}
-	return configuredThreadID
+
+	// Public mode discards all groups topic configuration by design.
+	return config.TopicForChatUsername(chat.Username)
 }
 
 func sendWithConfiguredTopic(chat *tele.Chat, what interface{}, parseMode tele.ParseMode, markup *tele.ReplyMarkup) (*tele.Message, error) {
-	opts := buildSendOptionsWithTopic(parseMode, markup, topicThreadIDForChat(chat, cfg.Bot.TopicThreadID))
+	opts := buildSendOptionsWithTopic(parseMode, markup, topicThreadIDForChat(chat))
 	return bot.Send(chat, what, opts)
 }
 

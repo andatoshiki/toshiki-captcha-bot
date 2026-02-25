@@ -1,9 +1,11 @@
-package main
+package cli
 
 import "testing"
 
 func TestParseCLIArgs(t *testing.T) {
 	t.Parallel()
+
+	const defaultConfigPath = "config.yaml"
 
 	tests := []struct {
 		name      string
@@ -69,7 +71,7 @@ func TestParseCLIArgs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := parseCLIArgs(tt.args)
+			got, err := ParseArgs(tt.args, defaultConfigPath)
 			if tt.expectErr {
 				if err == nil {
 					t.Fatalf("expected error, got nil")
@@ -80,14 +82,14 @@ func TestParseCLIArgs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parseCLIArgs returned error: %v", err)
 			}
-			if got.configPath != tt.wantPath {
-				t.Fatalf("configPath = %q, want %q", got.configPath, tt.wantPath)
+			if got.ConfigPath != tt.wantPath {
+				t.Fatalf("configPath = %q, want %q", got.ConfigPath, tt.wantPath)
 			}
-			if got.showHelp != tt.wantHelp {
-				t.Fatalf("showHelp = %v, want %v", got.showHelp, tt.wantHelp)
+			if got.ShowHelp != tt.wantHelp {
+				t.Fatalf("showHelp = %v, want %v", got.ShowHelp, tt.wantHelp)
 			}
-			if got.showVersion != tt.wantVer {
-				t.Fatalf("showVersion = %v, want %v", got.showVersion, tt.wantVer)
+			if got.ShowVersion != tt.wantVer {
+				t.Fatalf("showVersion = %v, want %v", got.ShowVersion, tt.wantVer)
 			}
 		})
 	}

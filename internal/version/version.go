@@ -1,4 +1,4 @@
-package main
+package version
 
 import (
 	"fmt"
@@ -15,7 +15,7 @@ var (
 	BuildTime = "unknown"
 )
 
-func versionText() string {
+func Text() string {
 	return fmt.Sprintf(
 		"toshiki-captcha-bot\nVersion: %s\nCommit: %s\nBuild time: %s\nGo: %s %s/%s\n",
 		Version,
@@ -27,7 +27,7 @@ func versionText() string {
 	)
 }
 
-func versionTextMarkdown() string {
+func MarkdownText() string {
 	runtimeInfo := fmt.Sprintf("%s %s/%s", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	return fmt.Sprintf(
 		"toshiki-captcha-bot\nVersion: %s\nCommit: %s\nBuild time: %s\nGo: %s\n",
