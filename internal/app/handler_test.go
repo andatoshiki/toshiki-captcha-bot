@@ -557,26 +557,12 @@ func TestCaptchaSendTimeoutMarker(t *testing.T) {
 	}
 }
 
-func TestResolveTestCaptchaTarget(t *testing.T) {
+func TestResolveTestCaptchaTargetFromReply(t *testing.T) {
 	t.Parallel()
 
-	sender := &tele.User{ID: 1, Username: "admin_user"}
-	target := &tele.User{ID: 2, Username: "target_user"}
+	target := &tele.User{ID: 2}
 
-	t.Run("resolves sender self by username", func(t *testing.T) {
-		t.Parallel()
-
-		msg := &tele.Message{}
-		got, err := resolveTestCaptchaTarget(sender, msg, "@admin_user")
-		if err != nil {
-			t.Fatalf("resolveTestCaptchaTarget returned error: %v", err)
-		}
-		if got == nil || got.ID != sender.ID {
-			t.Fatalf("resolved user id = %v, want %d", got, sender.ID)
-		}
-	})
-
-	t.Run("resolves replied target by username", func(t *testing.T) {
+	t.Run("resolves replied target without username", func(t *testing.T) {
 		t.Parallel()
 
 		msg := &tele.Message{
@@ -584,36 +570,31 @@ func TestResolveTestCaptchaTarget(t *testing.T) {
 				Sender: target,
 			},
 		}
-		got, err := resolveTestCaptchaTarget(sender, msg, "@target_user")
+		got, err := resolveTestCaptchaTargetFromReply(msg)
 		if err != nil {
-			t.Fatalf("resolveTestCaptchaTarget returned error: %v", err)
+			t.Fatalf("resolveTestCaptchaTargetFromReply returned error: %v", err)
 		}
 		if got == nil || got.ID != target.ID {
 			t.Fatalf("resolved user id = %v, want %d", got, target.ID)
 		}
 	})
 
-	t.Run("fails when no reply for non-self username", func(t *testing.T) {
+	t.Run("fails when no reply target", func(t *testing.T) {
 		t.Parallel()
 
 		msg := &tele.Message{}
-		_, err := resolveTestCaptchaTarget(sender, msg, "@target_user")
+		_, err := resolveTestCaptchaTargetFromReply(msg)
 		if err == nil {
-			t.Fatalf("expected error when non-self username has no reply context")
+			t.Fatalf("expected error for missing reply target")
 		}
 	})
 
-	t.Run("fails on mismatch between arg and replied username", func(t *testing.T) {
+	t.Run("fails when command message is nil", func(t *testing.T) {
 		t.Parallel()
 
-		msg := &tele.Message{
-			ReplyTo: &tele.Message{
-				Sender: target,
-			},
-		}
-		_, err := resolveTestCaptchaTarget(sender, msg, "@other_user")
+		_, err := resolveTestCaptchaTargetFromReply(nil)
 		if err == nil {
-			t.Fatalf("expected mismatch error")
+			t.Fatalf("expected error for nil command message")
 		}
 	})
 }
