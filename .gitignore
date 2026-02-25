@@ -24,6 +24,8 @@ vendor/
 
 # Local runtime config and secrets
 config.yaml
+.config.yaml.command-scopes.json
+*.command-scopes.json
 .env
 .env.*
 
