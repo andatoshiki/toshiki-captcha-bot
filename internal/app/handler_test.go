@@ -516,6 +516,21 @@ func TestCaptchaSuccessCallbackText(t *testing.T) {
 	}
 }
 
+func TestNotYourCaptchaCallbackResponse(t *testing.T) {
+	t.Parallel()
+
+	resp := notYourCaptchaCallbackResponse()
+	if resp == nil {
+		t.Fatalf("notYourCaptchaCallbackResponse returned nil")
+	}
+	if !resp.ShowAlert {
+		t.Fatalf("show alert = %t, want true", resp.ShowAlert)
+	}
+	if !strings.Contains(resp.Text, "not your captcha") {
+		t.Fatalf("response text = %q, expected not-your-captcha message", resp.Text)
+	}
+}
+
 func TestCaptchaTimeoutNoticeText(t *testing.T) {
 	t.Parallel()
 

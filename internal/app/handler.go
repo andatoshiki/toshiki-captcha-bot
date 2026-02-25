@@ -481,6 +481,13 @@ func captchaSuccessCallbackText(status captcha.JoinStatus) string {
 	return "Successfully joined."
 }
 
+func notYourCaptchaCallbackResponse() *tele.CallbackResponse {
+	return &tele.CallbackResponse{
+		Text:      "This is not your captcha challenge Please solve your own challenge",
+		ShowAlert: true,
+	}
+}
+
 func captchaTimeoutNoticeText(status captcha.JoinStatus) string {
 	return fmt.Sprintf("Captcha timeout, %v did not resolve the challenge in time.", captchaFailureUserMention(status))
 }
@@ -596,7 +603,7 @@ func handleAnswer(c tele.Context) error {
 
 	status := captcha.JoinStatus{}
 	if data, found := db.Get(kvID); !found {
-		c.Respond(&tele.CallbackResponse{Text: "This challenge is not for you."})
+		c.Respond(notYourCaptchaCallbackResponse())
 		log.Printf("Answer rejected (missing challenge) chat_id=%d user_id=%d", c.Chat().ID, c.Callback().Sender.ID)
 		return nil
 	} else {
@@ -609,7 +616,7 @@ func handleAnswer(c tele.Context) error {
 		}
 		log.Printf("Captcha message bound chat_id=%d user_id=%d message_id=%d", c.Chat().ID, c.Callback().Sender.ID, messageID)
 	} else if messageID != status.CaptchaMessage.ID {
-		c.Respond(&tele.CallbackResponse{Text: "This challenge is not for you."})
+		c.Respond(notYourCaptchaCallbackResponse())
 		log.Printf("Answer rejected (message mismatch) chat_id=%d user_id=%d got_message_id=%d expected_message_id=%d", c.Chat().ID, c.Callback().Sender.ID, messageID, status.CaptchaMessage.ID)
 		return nil
 	}
