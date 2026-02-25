@@ -1,9 +1,12 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tele "gopkg.in/telebot.v3"
 	"toshiki-captcha-bot/internal/captcha"
@@ -307,4 +310,77 @@ func TestCaptchaMarkupFromButtons(t *testing.T) {
 			t.Fatalf("row1 size = %d, want 2", len(markup.InlineKeyboard[1]))
 		}
 	})
+}
+
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+func TestIsTimeoutLikeError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "context deadline exceeded",
+			err:  context.DeadlineExceeded,
+			want: true,
+		},
+		{
+			name: "net timeout",
+			err:  timeoutErr{},
+			want: true,
+		},
+		{
+			name: "telegram client timeout string",
+			err:  fmt.Errorf("telebot: Post ...: context deadline exceeded (Client.Timeout exceeded while awaiting headers)"),
+			want: true,
+		},
+		{
+			name: "non-timeout",
+			err:  errors.New("bad request"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := isTimeoutLikeError(tt.err)
+			if got != tt.want {
+				t.Fatalf("isTimeoutLikeError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyCaptchaRestriction(t *testing.T) {
+	t.Parallel()
+
+	member := &tele.ChatMember{
+		User:   &tele.User{ID: 42},
+		Rights: tele.NoRestrictions(),
+	}
+
+	start := time.Now().Unix()
+	applyCaptchaRestriction(member, 2*time.Minute)
+
+	if member.RestrictedUntil <= start {
+		t.Fatalf("restricted_until = %d, expected > %d", member.RestrictedUntil, start)
+	}
+	if member.Rights != tele.NoRights() {
+		t.Fatalf("rights = %+v, want %+v", member.Rights, tele.NoRights())
+	}
 }
