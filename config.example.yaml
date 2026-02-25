@@ -1,9 +1,13 @@
 bot:
   token: "123456789:telegram-bot-token"
   poll_timeout: 10s
-  public: true
-  allowed_user_ids: []
-  topic_link: "https://t.me/c/1234567890/4/77"
+  # Empty means public mode: anyone can use the bot and groups config is ignored.
+  # Set at least one numeric user id to enable private mode.
+  admin_user_ids: [123456789]
+
+groups:
+  - id: "@somepublicgroup"
+    topic: 4
 
 captcha:
   expiration: 1m

@@ -13,7 +13,9 @@ var (
 	bot *tele.Bot
 
 	cfg = defaultRuntimeConfig()
-	db  = minikv.New(cfg.Captcha.Expiration, cfg.Captcha.CleanupInterval)
+	db  *minikv.KV
+
+	commandScopeStatePath = commandScopeStatePathForConfig(defaultConfigPath)
 )
 
 func main() {
@@ -35,6 +37,8 @@ func main() {
 		return
 	}
 
+	commandScopeStatePath = commandScopeStatePathForConfig(opts.configPath)
+
 	loadedCfg, err := loadConfig(opts.configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
@@ -42,13 +46,13 @@ func main() {
 	cfg = loadedCfg
 	db = minikv.New(cfg.Captcha.Expiration, cfg.Captcha.CleanupInterval)
 	log.Printf(
-		"Loaded config path=%q poll_timeout=%s public=%t allowed_user_ids=%d topic_link=%q topic_thread_id=%d captcha_expiration=%s max_failures=%d",
+		"Loaded config path=%q poll_timeout=%s public_mode=%t admin_user_ids=%d groups=%d topic_mappings=%d captcha_expiration=%s max_failures=%d",
 		opts.configPath,
 		cfg.Bot.PollTimeout,
-		cfg.Bot.Public,
-		len(cfg.Bot.allowedUsers),
-		cfg.Bot.TopicLink,
-		cfg.Bot.TopicThreadID,
+		cfg.isPublicMode(),
+		len(cfg.Bot.adminUsers),
+		len(cfg.Groups),
+		len(cfg.groupTopics),
 		cfg.Captcha.Expiration,
 		cfg.Captcha.MaxFailures,
 	)

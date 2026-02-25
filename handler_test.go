@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	tele "gopkg.in/telebot.v3"
+)
 
 func TestIsNextCaptchaAnswer(t *testing.T) {
 	t.Parallel()
@@ -88,4 +93,80 @@ func TestIsNextCaptchaAnswer(t *testing.T) {
 			}
 		})
 	}
+}
+
+type mockAdminCommandResponder struct {
+	chat      *tele.Chat
+	sender    *tele.User
+	sendErr   error
+	sendCount int
+	lastText  string
+}
+
+func (m *mockAdminCommandResponder) Chat() *tele.Chat {
+	return m.chat
+}
+
+func (m *mockAdminCommandResponder) Sender() *tele.User {
+	return m.sender
+}
+
+func (m *mockAdminCommandResponder) Send(what interface{}, _ ...interface{}) error {
+	m.sendCount++
+	if text, ok := what.(string); ok {
+		m.lastText = text
+	}
+	return m.sendErr
+}
+
+func TestRespondAdminOnlyCommandDenied(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sends denial message for valid context", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := &mockAdminCommandResponder{
+			chat:   &tele.Chat{ID: -1001},
+			sender: &tele.User{ID: 42},
+		}
+
+		respondAdminOnlyCommandDenied(ctx, "/ping")
+
+		if ctx.sendCount != 1 {
+			t.Fatalf("sendCount = %d, want 1", ctx.sendCount)
+		}
+		if ctx.lastText != adminOnlyCommandErrorText("/ping") {
+			t.Fatalf("lastText = %q, want %q", ctx.lastText, adminOnlyCommandErrorText("/ping"))
+		}
+	})
+
+	t.Run("skips when sender missing", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := &mockAdminCommandResponder{
+			chat: &tele.Chat{ID: -1001},
+		}
+
+		respondAdminOnlyCommandDenied(ctx, "/testcaptcha")
+
+		if ctx.sendCount != 0 {
+			t.Fatalf("sendCount = %d, want 0", ctx.sendCount)
+		}
+	})
+
+	t.Run("safe when send returns error", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := &mockAdminCommandResponder{
+			chat:    &tele.Chat{ID: -1001},
+			sender:  &tele.User{ID: 42},
+			sendErr: errors.New("send failed"),
+		}
+
+		respondAdminOnlyCommandDenied(ctx, "/ping")
+
+		if ctx.sendCount != 1 {
+			t.Fatalf("sendCount = %d, want 1", ctx.sendCount)
+		}
+	})
 }

@@ -13,13 +13,35 @@ import (
 	tele "gopkg.in/telebot.v3"
 )
 
+type adminCommandResponder interface {
+	Chat() *tele.Chat
+	Sender() *tele.User
+	Send(what interface{}, opts ...interface{}) error
+}
+
 func onPing(c tele.Context) error {
-	if !isSenderAllowed(c) {
-		logAccessDenied(c, "ping_sender_not_allowed")
+	if c == nil || c.Chat() == nil {
+		log.Printf("warn: ping skipped reason=missing_chat_context")
 		return nil
 	}
-	if c.Chat() == nil {
-		log.Printf("warn: ping skipped reason=missing_chat_context")
+	if c.Sender() == nil {
+		log.Printf("warn: ping skipped reason=missing_sender chat_id=%d", c.Chat().ID)
+		return nil
+	}
+	if leaveIfUnsupportedPrivateGroup(c.Chat(), "ping") {
+		return nil
+	}
+	if !isAllowedCommandChat(c.Chat()) {
+		logAccessDenied(c, "ping_chat_not_allowed")
+		if isGroupChat(c.Chat()) {
+			leaveChat(c.Chat(), "unauthorized_group")
+		}
+		return nil
+	}
+
+	if !isSenderAllowed(c) {
+		logAccessDenied(c, "ping_sender_not_allowed")
+		respondAdminOnlyCommandDenied(c, "/ping")
 		return nil
 	}
 
@@ -49,7 +71,7 @@ func onPing(c tele.Context) error {
 		username,
 		messageID,
 		threadID,
-		cfg.Bot.TopicThreadID,
+		topicThreadIDForChat(c.Chat()),
 	)
 
 	start := time.Now()
@@ -83,19 +105,76 @@ func onPing(c tele.Context) error {
 }
 
 func onTestCaptcha(c tele.Context) error {
-	if !isSenderAllowedOrAdmin(c) {
-		logAccessDenied(c, "testcaptcha_sender_not_allowed")
+	if c == nil || c.Chat() == nil {
+		log.Printf("warn: testcaptcha skipped reason=missing_chat_context")
 		return nil
 	}
+	if c.Sender() == nil {
+		log.Printf("warn: testcaptcha skipped reason=missing_sender chat_id=%d", c.Chat().ID)
+		return nil
+	}
+	if leaveIfUnsupportedPrivateGroup(c.Chat(), "testcaptcha") {
+		return nil
+	}
+	if !isAllowedCommandChat(c.Chat()) {
+		logAccessDenied(c, "testcaptcha_chat_not_allowed")
+		if isGroupChat(c.Chat()) {
+			leaveChat(c.Chat(), "unauthorized_group")
+		}
+		return nil
+	}
+	if !isSenderAllowed(c) {
+		logAccessDenied(c, "testcaptcha_sender_not_allowed")
+		respondAdminOnlyCommandDenied(c, "/testcaptcha")
+		return nil
+	}
+	if c.Chat().Type == tele.ChatPrivate {
+		log.Printf("warn: testcaptcha skipped reason=private_chat_requires_group chat_id=%d user_id=%d", c.Chat().ID, c.Sender().ID)
+		return nil
+	}
+	log.Printf("Manual captcha trigger chat_id=%d user_id=%d", c.Chat().ID, c.Sender().ID)
 	return onJoin(c)
 }
 
+func respondAdminOnlyCommandDenied(c adminCommandResponder, command string) {
+	if c == nil || c.Chat() == nil || c.Sender() == nil {
+		return
+	}
+	if err := c.Send(adminOnlyCommandErrorText(command)); err != nil {
+		log.Printf(
+			"warn: failed to send unauthorized response command=%s chat_id=%d user_id=%d err=%v",
+			command,
+			c.Chat().ID,
+			c.Sender().ID,
+			err,
+		)
+	}
+}
+
 func onJoin(c tele.Context) error {
+	if c == nil || c.Chat() == nil {
+		return nil
+	}
+	if c.Sender() == nil {
+		log.Printf("warn: join skipped reason=missing_sender chat_id=%d", c.Chat().ID)
+		return nil
+	}
+	if c.Message() == nil {
+		log.Printf("warn: join skipped reason=missing_message chat_id=%d user_id=%d", c.Chat().ID, c.Sender().ID)
+		return nil
+	}
+
 	if c.Chat().Type == tele.ChatPrivate {
 		return nil
 	}
+
+	if leaveIfUnsupportedPrivateGroup(c.Chat(), "join") {
+		return nil
+	}
+
 	if !isContextAuthorized(c) {
 		logAccessDenied(c, "join")
+		leaveChat(c.Chat(), "unauthorized_group")
 		return nil
 	}
 
@@ -219,7 +298,7 @@ func onJoin(c tele.Context) error {
 			c.Sender().ID,
 			msg.ID,
 			len(captchaAnswer),
-			cfg.Bot.TopicThreadID,
+			topicThreadIDForChat(c.Chat()),
 		)
 
 		chatMember, err := bot.ChatMemberOf(c.Chat(), c.Sender())

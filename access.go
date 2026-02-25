@@ -3,52 +3,106 @@ package main
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	tele "gopkg.in/telebot.v3"
 )
 
-func isContextAuthorized(c tele.Context) bool {
-	if cfg.Bot.Public {
+func isGroupChat(chat *tele.Chat) bool {
+	if chat == nil {
+		return false
+	}
+	return chat.Type == tele.ChatGroup || chat.Type == tele.ChatSuperGroup
+}
+
+func isPublicGroupChat(chat *tele.Chat) bool {
+	if !isGroupChat(chat) {
+		return false
+	}
+	return strings.TrimSpace(chat.Username) != ""
+}
+
+func isAllowedGroupChat(chat *tele.Chat) bool {
+	return isAllowedGroupChatWithConfig(chat, cfg)
+}
+
+func isAllowedGroupChatWithConfig(chat *tele.Chat, config runtimeConfig) bool {
+	if !isGroupChat(chat) {
+		return false
+	}
+	if !isPublicGroupChat(chat) {
+		return false
+	}
+	if config.isPublicMode() {
 		return true
 	}
-	if c == nil {
+
+	groupID := normalizePublicGroupLookupID(chat.Username)
+	if groupID == "" {
 		return false
 	}
+	_, ok := config.groupAllow[groupID]
+	return ok
+}
 
-	if sender := c.Sender(); sender != nil {
-		if _, ok := cfg.Bot.allowedUsers[sender.ID]; ok {
-			return true
-		}
-	}
+func isAllowedCommandChat(chat *tele.Chat) bool {
+	return isAllowedCommandChatWithConfig(chat, cfg)
+}
 
-	chat := c.Chat()
-	if chat == nil || bot == nil {
+func isAllowedCommandChatWithConfig(chat *tele.Chat, config runtimeConfig) bool {
+	if chat == nil {
 		return false
 	}
-
-	admins, err := bot.AdminsOf(chat)
-	if err != nil {
-		log.Printf("warn: failed to resolve chat admins chat_id=%d err=%v", chat.ID, err)
-		return false
+	if chat.Type == tele.ChatPrivate {
+		return true
 	}
-
-	for _, admin := range admins {
-		if admin.User == nil {
-			continue
-		}
-		if _, ok := cfg.Bot.allowedUsers[admin.User.ID]; ok {
-			return true
-		}
+	if isGroupChat(chat) {
+		return isAllowedGroupChatWithConfig(chat, config)
 	}
-
 	return false
+}
+
+func leaveChat(chat *tele.Chat, reason string) {
+	if chat == nil {
+		return
+	}
+	if bot == nil {
+		log.Printf("warn: leave skipped chat_id=%d reason=%s err=bot_not_initialized", chat.ID, reason)
+		return
+	}
+	if err := bot.Leave(chat); err != nil {
+		log.Printf("warn: failed to leave chat chat_id=%d reason=%s err=%v", chat.ID, reason, err)
+	}
+}
+
+func leaveIfUnsupportedPrivateGroup(chat *tele.Chat, trigger string) bool {
+	if !isGroupChat(chat) || isPublicGroupChat(chat) {
+		return false
+	}
+	log.Printf("Unsupported chat type for captcha bot chat_id=%d chat_type=%s trigger=%s reason=private_group_without_username", chat.ID, chat.Type, trigger)
+	leaveChat(chat, "private_group_without_username")
+	return true
+}
+
+func isContextAuthorized(c tele.Context) bool {
+	if c == nil || c.Chat() == nil {
+		return false
+	}
+	return isAuthorizedGroupChatWithConfig(c.Chat(), cfg)
+}
+
+func isAuthorizedGroupChatWithConfig(chat *tele.Chat, config runtimeConfig) bool {
+	if !isGroupChat(chat) {
+		return false
+	}
+	return isAllowedGroupChatWithConfig(chat, config)
 }
 
 func isAllowedUserID(userID int64) bool {
 	if userID <= 0 {
 		return false
 	}
-	_, ok := cfg.Bot.allowedUsers[userID]
+	_, ok := cfg.Bot.adminUsers[userID]
 	return ok
 }
 
@@ -57,42 +111,6 @@ func isSenderAllowed(c tele.Context) bool {
 		return false
 	}
 	return isAllowedUserID(c.Sender().ID)
-}
-
-func isUserInChatAdmins(userID int64, admins []tele.ChatMember) bool {
-	if userID <= 0 {
-		return false
-	}
-	for _, admin := range admins {
-		if admin.User == nil {
-			continue
-		}
-		if admin.User.ID == userID {
-			return true
-		}
-	}
-	return false
-}
-
-func isSenderChatAdmin(c tele.Context) bool {
-	if c == nil || c.Sender() == nil || c.Chat() == nil || bot == nil {
-		return false
-	}
-
-	admins, err := bot.AdminsOf(c.Chat())
-	if err != nil {
-		log.Printf("warn: failed to resolve chat admins chat_id=%d err=%v", c.Chat().ID, err)
-		return false
-	}
-
-	return isUserInChatAdmins(c.Sender().ID, admins)
-}
-
-func isSenderAllowedOrAdmin(c tele.Context) bool {
-	if isSenderAllowed(c) {
-		return true
-	}
-	return isSenderChatAdmin(c)
 }
 
 func logAccessDenied(c tele.Context, event string) {
@@ -104,20 +122,22 @@ func logAccessDenied(c tele.Context, event string) {
 	if c != nil && c.Sender() != nil {
 		userID = c.Sender().ID
 	}
-	log.Printf("Access denied event=%s chat_id=%d user_id=%d public=%t", event, chatID, userID, cfg.Bot.Public)
+	log.Printf("Access denied event=%s chat_id=%d user_id=%d public_mode=%t", event, chatID, userID, cfg.isPublicMode())
 }
 
 func onAddedToGroup(c tele.Context) error {
+	if c == nil || c.Chat() == nil {
+		return nil
+	}
+	if leaveIfUnsupportedPrivateGroup(c.Chat(), "added_to_group") {
+		return nil
+	}
+
 	if isContextAuthorized(c) {
 		return nil
 	}
 	logAccessDenied(c, "added_to_group")
-	if c.Chat() == nil {
-		return nil
-	}
-	if err := bot.Leave(c.Chat()); err != nil {
-		log.Printf("warn: failed to leave unauthorized chat chat_id=%d err=%v", c.Chat().ID, err)
-	}
+	leaveChat(c.Chat(), "unauthorized_group")
 	return nil
 }
 

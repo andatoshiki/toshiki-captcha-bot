@@ -2,9 +2,8 @@ package main
 
 import (
 	"fmt"
-	"net/url"
 	"os"
-	"strconv"
+	"regexp"
 	"strings"
 	"time"
 
@@ -13,19 +12,26 @@ import (
 
 const defaultConfigPath = "config.yaml"
 
+var publicGroupIDPattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{4,31}$`)
+
 type runtimeConfig struct {
-	Bot     botConfig     `yaml:"bot"`
-	Captcha captchaConfig `yaml:"captcha"`
+	Bot         botConfig           `yaml:"bot"`
+	Groups      []groupTopicConfig  `yaml:"groups"`
+	groupAllow  map[string]struct{} `yaml:"-"`
+	groupTopics map[string]int      `yaml:"-"`
+	Captcha     captchaConfig       `yaml:"captcha"`
 }
 
 type botConfig struct {
-	Token          string             `yaml:"token"`
-	PollTimeout    time.Duration      `yaml:"poll_timeout"`
-	TopicLink      string             `yaml:"topic_link"`
-	Public         bool               `yaml:"public"`
-	AllowedUserIDs []int64            `yaml:"allowed_user_ids"`
-	allowedUsers   map[int64]struct{} `yaml:"-"`
-	TopicThreadID  int                `yaml:"-"`
+	Token        string             `yaml:"token"`
+	PollTimeout  time.Duration      `yaml:"poll_timeout"`
+	AdminUserIDs []int64            `yaml:"admin_user_ids"`
+	adminUsers   map[int64]struct{} `yaml:"-"`
+}
+
+type groupTopicConfig struct {
+	ID    string `yaml:"id"`
+	Topic int    `yaml:"topic"`
 }
 
 type captchaConfig struct {
@@ -39,8 +45,8 @@ func defaultRuntimeConfig() runtimeConfig {
 	return runtimeConfig{
 		Bot: botConfig{
 			PollTimeout: 10 * time.Second,
-			Public:      true,
 		},
+		Groups: make([]groupTopicConfig, 0),
 		Captcha: captchaConfig{
 			Expiration:       1 * time.Minute,
 			CleanupInterval:  5 * time.Second,
@@ -80,23 +86,49 @@ func (c *runtimeConfig) validate() error {
 		return fmt.Errorf("bot.poll_timeout must be greater than zero")
 	}
 
-	topicThreadID, err := parseTopicIDReference(c.Bot.TopicLink)
-	if err != nil {
-		return fmt.Errorf("bot.topic_link is invalid: %w", err)
-	}
-	c.Bot.TopicThreadID = topicThreadID
-
-	allowedUsers := make(map[int64]struct{}, len(c.Bot.AllowedUserIDs))
-	for _, userID := range c.Bot.AllowedUserIDs {
+	adminUsers := make(map[int64]struct{}, len(c.Bot.AdminUserIDs))
+	for _, userID := range c.Bot.AdminUserIDs {
 		if userID <= 0 {
-			return fmt.Errorf("bot.allowed_user_ids must contain positive integers")
+			return fmt.Errorf("bot.admin_user_ids must contain positive integers")
 		}
-		allowedUsers[userID] = struct{}{}
+		adminUsers[userID] = struct{}{}
 	}
-	c.Bot.allowedUsers = allowedUsers
+	c.Bot.adminUsers = adminUsers
 
-	if !c.Bot.Public && len(c.Bot.allowedUsers) == 0 {
-		return fmt.Errorf("bot.allowed_user_ids is required when bot.public is false")
+	// Public mode is derived: when no admin_user_ids are configured,
+	// group topic settings are intentionally ignored.
+	if c.isPublicMode() {
+		c.Groups = nil
+		c.groupAllow = make(map[string]struct{})
+		c.groupTopics = make(map[string]int)
+	} else {
+		groupAllow := make(map[string]struct{}, len(c.Groups))
+		groupTopics := make(map[string]int, len(c.Groups))
+		seen := make(map[string]struct{}, len(c.Groups))
+
+		for i, group := range c.Groups {
+			normalizedGroupID, err := normalizePublicGroupID(group.ID)
+			if err != nil {
+				return fmt.Errorf("groups[%d].id is invalid: %w", i, err)
+			}
+			c.Groups[i].ID = "@" + normalizedGroupID
+
+			if _, exists := seen[normalizedGroupID]; exists {
+				return fmt.Errorf("groups[%d].id duplicates @%s", i, normalizedGroupID)
+			}
+			seen[normalizedGroupID] = struct{}{}
+			groupAllow[normalizedGroupID] = struct{}{}
+
+			if group.Topic < 0 {
+				return fmt.Errorf("groups[%d].topic must be greater than zero when set", i)
+			}
+			if group.Topic > 0 {
+				groupTopics[normalizedGroupID] = group.Topic
+			}
+		}
+
+		c.groupAllow = groupAllow
+		c.groupTopics = groupTopics
 	}
 
 	if c.Captcha.Expiration <= 0 {
@@ -114,64 +146,32 @@ func (c *runtimeConfig) validate() error {
 	return nil
 }
 
-func parseTopicIDReference(ref string) (int, error) {
-	cleanRef := strings.TrimSpace(ref)
-	if cleanRef == "" {
-		return 0, nil
+func (c runtimeConfig) isPublicMode() bool {
+	return len(c.Bot.adminUsers) == 0
+}
+
+func normalizePublicGroupID(raw string) (string, error) {
+	id := strings.TrimSpace(raw)
+	id = strings.TrimPrefix(id, "@")
+	id = strings.ToLower(id)
+
+	if id == "" {
+		return "", fmt.Errorf("must not be empty")
 	}
 
-	parsedURL, err := url.Parse(cleanRef)
-	if err != nil {
-		return 0, fmt.Errorf("parse URL: %w", err)
-	}
-	if parsedURL.Host == "" {
-		return 0, fmt.Errorf("missing host in URL")
+	if !publicGroupIDPattern.MatchString(id) {
+		return "", fmt.Errorf("must be a public group username like @mygroup")
 	}
 
-	host := strings.TrimPrefix(strings.ToLower(parsedURL.Host), "www.")
-	if host != "t.me" && host != "telegram.me" {
-		return 0, fmt.Errorf("unsupported host %q (expected t.me or telegram.me)", parsedURL.Host)
-	}
+	return id, nil
+}
 
-	if threadParam := strings.TrimSpace(parsedURL.Query().Get("thread")); threadParam != "" {
-		topicID, err := strconv.Atoi(threadParam)
-		if err != nil || topicID <= 0 {
-			return 0, fmt.Errorf("invalid thread query parameter %q", threadParam)
-		}
-		return topicID, nil
+func normalizePublicGroupLookupID(raw string) string {
+	id := strings.TrimSpace(raw)
+	id = strings.TrimPrefix(id, "@")
+	id = strings.ToLower(id)
+	if id == "" {
+		return ""
 	}
-
-	segments := strings.Split(strings.Trim(parsedURL.Path, "/"), "/")
-	numeric := make([]int, 0, len(segments))
-	for _, segment := range segments {
-		n, err := strconv.Atoi(segment)
-		if err != nil || n <= 0 {
-			continue
-		}
-		numeric = append(numeric, n)
-	}
-
-	if len(numeric) == 0 {
-		return 0, fmt.Errorf("no numeric topic identifier found in URL path")
-	}
-
-	if len(segments) >= 3 && strings.EqualFold(segments[0], "c") {
-		if len(numeric) == 1 {
-			return numeric[0], nil
-		}
-		if len(numeric) == 2 {
-			return numeric[1], nil
-		}
-		return numeric[len(numeric)-2], nil
-	}
-
-	// Links can have the topic in path as:
-	// - /<chat-or-user>/<topic>/<message>
-	// - /c/<chat>/<topic>/<message>
-	// If only one numeric segment is present, use it as best-effort fallback.
-	if len(numeric) >= 2 {
-		return numeric[len(numeric)-2], nil
-	}
-
-	return numeric[len(numeric)-1], nil
+	return id
 }

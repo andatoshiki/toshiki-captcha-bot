@@ -17,7 +17,7 @@ func TestRuntimeConfigValidate(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name: "valid config",
+			name: "valid config in public mode",
 		},
 		{
 			name: "missing bot token",
@@ -34,38 +34,59 @@ func TestRuntimeConfigValidate(t *testing.T) {
 			wantErr: "bot.poll_timeout",
 		},
 		{
-			name: "invalid topic link host",
+			name: "invalid admin user id",
 			mutate: func(cfg *runtimeConfig) {
-				cfg.Bot.TopicLink = "https://example.com/c/1/2"
+				cfg.Bot.AdminUserIDs = []int64{0}
 			},
-			wantErr: "bot.topic_link",
+			wantErr: "bot.admin_user_ids must contain positive integers",
 		},
 		{
-			name: "invalid topic link thread query",
+			name: "private mode with valid groups",
 			mutate: func(cfg *runtimeConfig) {
-				cfg.Bot.TopicLink = "https://t.me/c/1234567890/4?thread=abc"
+				cfg.Bot.AdminUserIDs = []int64{1001}
+				cfg.Groups = []groupTopicConfig{
+					{ID: "@somegroup", Topic: 9},
+					{ID: "anothergroup", Topic: 0},
+				}
 			},
-			wantErr: "bot.topic_link",
 		},
 		{
-			name: "private mode requires allowed users",
+			name: "private mode invalid group username",
 			mutate: func(cfg *runtimeConfig) {
-				cfg.Bot.Public = false
+				cfg.Bot.AdminUserIDs = []int64{1001}
+				cfg.Groups = []groupTopicConfig{
+					{ID: "bad group name", Topic: 1},
+				}
 			},
-			wantErr: "bot.allowed_user_ids is required when bot.public is false",
+			wantErr: "groups[0].id is invalid",
 		},
 		{
-			name: "invalid allowed user id",
+			name: "private mode duplicate groups",
 			mutate: func(cfg *runtimeConfig) {
-				cfg.Bot.AllowedUserIDs = []int64{1, 0}
+				cfg.Bot.AdminUserIDs = []int64{1001}
+				cfg.Groups = []groupTopicConfig{
+					{ID: "@samegroup", Topic: 1},
+					{ID: "samegroup", Topic: 2},
+				}
 			},
-			wantErr: "bot.allowed_user_ids must contain positive integers",
+			wantErr: "duplicates",
 		},
 		{
-			name: "private mode with allowed users",
+			name: "private mode invalid topic",
 			mutate: func(cfg *runtimeConfig) {
-				cfg.Bot.Public = false
-				cfg.Bot.AllowedUserIDs = []int64{1001}
+				cfg.Bot.AdminUserIDs = []int64{1001}
+				cfg.Groups = []groupTopicConfig{
+					{ID: "@somegroup", Topic: -1},
+				}
+			},
+			wantErr: "groups[0].topic",
+		},
+		{
+			name: "public mode discards groups config",
+			mutate: func(cfg *runtimeConfig) {
+				cfg.Groups = []groupTopicConfig{
+					{ID: "invalid group id with spaces", Topic: 99},
+				}
 			},
 		},
 		{
@@ -152,17 +173,23 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.Bot.PollTimeout != want.Bot.PollTimeout {
 			t.Fatalf("Bot.PollTimeout = %v, want %v", cfg.Bot.PollTimeout, want.Bot.PollTimeout)
 		}
-		if cfg.Bot.Public != want.Bot.Public {
-			t.Fatalf("Bot.Public = %v, want %v", cfg.Bot.Public, want.Bot.Public)
+		if len(cfg.Bot.AdminUserIDs) != 0 {
+			t.Fatalf("Bot.AdminUserIDs length = %d, want 0", len(cfg.Bot.AdminUserIDs))
 		}
-		if len(cfg.Bot.AllowedUserIDs) != 0 {
-			t.Fatalf("Bot.AllowedUserIDs length = %d, want 0", len(cfg.Bot.AllowedUserIDs))
+		if len(cfg.Bot.adminUsers) != 0 {
+			t.Fatalf("Bot.adminUsers length = %d, want 0", len(cfg.Bot.adminUsers))
 		}
-		if len(cfg.Bot.allowedUsers) != 0 {
-			t.Fatalf("Bot.allowedUsers length = %d, want 0", len(cfg.Bot.allowedUsers))
+		if !cfg.isPublicMode() {
+			t.Fatalf("isPublicMode = false, want true")
 		}
-		if cfg.Bot.TopicThreadID != 0 {
-			t.Fatalf("Bot.TopicThreadID = %d, want 0", cfg.Bot.TopicThreadID)
+		if len(cfg.Groups) != 0 {
+			t.Fatalf("Groups length = %d, want 0", len(cfg.Groups))
+		}
+		if len(cfg.groupTopics) != 0 {
+			t.Fatalf("groupTopics length = %d, want 0", len(cfg.groupTopics))
+		}
+		if len(cfg.groupAllow) != 0 {
+			t.Fatalf("groupAllow length = %d, want 0", len(cfg.groupAllow))
 		}
 		if cfg.Captcha.Expiration != want.Captcha.Expiration {
 			t.Fatalf("Captcha.Expiration = %v, want %v", cfg.Captcha.Expiration, want.Captcha.Expiration)
@@ -178,12 +205,26 @@ func TestLoadConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("derives topic thread id from topic link", func(t *testing.T) {
+	t.Run("private mode with groups and topics", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.yaml")
-		content := "bot:\n  token: test-token\n  topic_link: https://t.me/c/1234567890/4/77\n"
+		content := strings.Join([]string{
+			"bot:",
+			"  token: test-token",
+			"  admin_user_ids: [1001, 1002]",
+			"groups:",
+			"  - id: \"@SomePublicGroup\"",
+			"    topic: 4",
+			"  - id: anothergroup",
+			"captcha:",
+			"  expiration: 1m",
+			"  cleanup_interval: 5s",
+			"  max_failures: 2",
+			"  failure_notice_ttl: 15s",
+			"",
+		}, "\n")
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatalf("write config file: %v", err)
 		}
@@ -193,17 +234,58 @@ func TestLoadConfig(t *testing.T) {
 			t.Fatalf("loadConfig returned error: %v", err)
 		}
 
-		if cfg.Bot.TopicThreadID != 4 {
-			t.Fatalf("Bot.TopicThreadID = %d, want 4", cfg.Bot.TopicThreadID)
+		if cfg.isPublicMode() {
+			t.Fatalf("isPublicMode = true, want false")
+		}
+		if len(cfg.Bot.adminUsers) != 2 {
+			t.Fatalf("Bot.adminUsers length = %d, want 2", len(cfg.Bot.adminUsers))
+		}
+		if _, ok := cfg.Bot.adminUsers[1001]; !ok {
+			t.Fatalf("Bot.adminUsers missing user id 1001")
+		}
+		if _, ok := cfg.Bot.adminUsers[1002]; !ok {
+			t.Fatalf("Bot.adminUsers missing user id 1002")
+		}
+
+		if len(cfg.Groups) != 2 {
+			t.Fatalf("Groups length = %d, want 2", len(cfg.Groups))
+		}
+		if cfg.Groups[0].ID != "@somepublicgroup" {
+			t.Fatalf("Groups[0].ID = %q, want %q", cfg.Groups[0].ID, "@somepublicgroup")
+		}
+		if cfg.Groups[0].Topic != 4 {
+			t.Fatalf("Groups[0].Topic = %d, want 4", cfg.Groups[0].Topic)
+		}
+		if cfg.Groups[1].ID != "@anothergroup" {
+			t.Fatalf("Groups[1].ID = %q, want %q", cfg.Groups[1].ID, "@anothergroup")
+		}
+		if cfg.groupTopics["somepublicgroup"] != 4 {
+			t.Fatalf("groupTopics[somepublicgroup] = %d, want 4", cfg.groupTopics["somepublicgroup"])
+		}
+		if _, ok := cfg.groupTopics["anothergroup"]; ok {
+			t.Fatalf("groupTopics[anothergroup] should not be set when topic is omitted")
+		}
+		if _, ok := cfg.groupAllow["somepublicgroup"]; !ok {
+			t.Fatalf("groupAllow missing somepublicgroup")
+		}
+		if _, ok := cfg.groupAllow["anothergroup"]; !ok {
+			t.Fatalf("groupAllow missing anothergroup")
 		}
 	})
 
-	t.Run("private mode with allowed users", func(t *testing.T) {
+	t.Run("public mode discards groups section", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.yaml")
-		content := "bot:\n  token: test-token\n  public: false\n  allowed_user_ids: [1001, 1002]\n"
+		content := strings.Join([]string{
+			"bot:",
+			"  token: test-token",
+			"groups:",
+			"  - id: invalid group id",
+			"    topic: 4",
+			"",
+		}, "\n")
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatalf("write config file: %v", err)
 		}
@@ -213,17 +295,17 @@ func TestLoadConfig(t *testing.T) {
 			t.Fatalf("loadConfig returned error: %v", err)
 		}
 
-		if cfg.Bot.Public {
-			t.Fatalf("Bot.Public = true, want false")
+		if !cfg.isPublicMode() {
+			t.Fatalf("isPublicMode = false, want true")
 		}
-		if len(cfg.Bot.allowedUsers) != 2 {
-			t.Fatalf("Bot.allowedUsers length = %d, want 2", len(cfg.Bot.allowedUsers))
+		if len(cfg.Groups) != 0 {
+			t.Fatalf("Groups length = %d, want 0", len(cfg.Groups))
 		}
-		if _, ok := cfg.Bot.allowedUsers[1001]; !ok {
-			t.Fatalf("Bot.allowedUsers missing user id 1001")
+		if len(cfg.groupTopics) != 0 {
+			t.Fatalf("groupTopics length = %d, want 0", len(cfg.groupTopics))
 		}
-		if _, ok := cfg.Bot.allowedUsers[1002]; !ok {
-			t.Fatalf("Bot.allowedUsers missing user id 1002")
+		if len(cfg.groupAllow) != 0 {
+			t.Fatalf("groupAllow length = %d, want 0", len(cfg.groupAllow))
 		}
 	})
 
@@ -248,9 +330,22 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: "decode YAML",
 		},
 		{
-			name:    "invalid topic link",
-			content: "bot:\n  token: test\n  topic_link: https://example.com/c/1/2\n",
-			wantErr: "bot.topic_link is invalid",
+			name:    "invalid admin user id",
+			content: "bot:\n  token: test\n  admin_user_ids: [0]\n",
+			wantErr: "bot.admin_user_ids must contain positive integers",
+		},
+		{
+			name: "invalid group id in private mode",
+			content: strings.Join([]string{
+				"bot:",
+				"  token: test",
+				"  admin_user_ids: [1001]",
+				"groups:",
+				"  - id: invalid group id",
+				"    topic: 1",
+				"",
+			}, "\n"),
+			wantErr: "groups[0].id is invalid",
 		},
 	}
 
@@ -276,49 +371,44 @@ func TestLoadConfig(t *testing.T) {
 	}
 }
 
-func TestParseTopicIDReference(t *testing.T) {
+func TestNormalizePublicGroupID(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name    string
 		input   string
-		wantID  int
+		want    string
 		wantErr string
 	}{
 		{
-			name:   "empty string means disabled topic routing",
-			input:  "",
-			wantID: 0,
+			name:  "with at prefix",
+			input: "@SomeGroup_123",
+			want:  "somegroup_123",
 		},
 		{
-			name:   "single numeric segment fallback",
-			input:  "https://t.me/c/1234567890/4",
-			wantID: 4,
+			name:  "without at prefix",
+			input: "SomeGroup_123",
+			want:  "somegroup_123",
 		},
 		{
-			name:   "topic and message segments",
-			input:  "https://t.me/c/1234567890/4/77",
-			wantID: 4,
+			name:    "empty value",
+			input:   "",
+			wantErr: "must not be empty",
 		},
 		{
-			name:   "public link with thread query",
-			input:  "https://t.me/my_group/123?thread=9",
-			wantID: 9,
+			name:    "too short",
+			input:   "@abc",
+			wantErr: "must be a public group username",
 		},
 		{
-			name:    "invalid host",
-			input:   "https://example.com/c/123/4",
-			wantErr: "unsupported host",
+			name:    "contains space",
+			input:   "@bad group",
+			wantErr: "must be a public group username",
 		},
 		{
-			name:    "no numeric segment",
-			input:   "https://t.me/c/mygroup/general",
-			wantErr: "no numeric topic identifier",
-		},
-		{
-			name:    "invalid thread query",
-			input:   "https://t.me/c/1234567890/4?thread=foo",
-			wantErr: "invalid thread query parameter",
+			name:    "starts with number",
+			input:   "@1groupname",
+			wantErr: "must be a public group username",
 		},
 	}
 
@@ -327,13 +417,13 @@ func TestParseTopicIDReference(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := parseTopicIDReference(tt.input)
+			got, err := normalizePublicGroupID(tt.input)
 			if tt.wantErr == "" {
 				if err != nil {
-					t.Fatalf("parseTopicIDReference returned error: %v", err)
+					t.Fatalf("normalizePublicGroupID returned error: %v", err)
 				}
-				if got != tt.wantID {
-					t.Fatalf("topic id = %d, want %d", got, tt.wantID)
+				if got != tt.want {
+					t.Fatalf("normalized id = %q, want %q", got, tt.want)
 				}
 				return
 			}

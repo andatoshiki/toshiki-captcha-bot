@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	tele "gopkg.in/telebot.v3"
@@ -56,32 +57,53 @@ func TestBuildSendOptionsWithTopic(t *testing.T) {
 func TestTopicThreadIDForChat(t *testing.T) {
 	t.Parallel()
 
-	const configuredThreadID = 42
-
 	tests := []struct {
-		name    string
-		chat    *tele.Chat
-		wantID  int
+		name   string
+		cfg    runtimeConfig
+		chat   *tele.Chat
+		wantID int
 	}{
 		{
 			name:   "nil chat falls back to root",
+			cfg:    runtimeConfig{},
 			chat:   nil,
 			wantID: 0,
 		},
 		{
 			name:   "private chat ignores configured topic",
+			cfg:    runtimeConfig{},
 			chat:   &tele.Chat{Type: tele.ChatPrivate},
 			wantID: 0,
 		},
 		{
-			name:   "group chat uses configured topic",
-			chat:   &tele.Chat{Type: tele.ChatGroup},
-			wantID: configuredThreadID,
+			name: "public mode discards groups topic mapping",
+			cfg: runtimeConfig{
+				groupTopics: map[string]int{"somegroup": 42},
+			},
+			chat:   &tele.Chat{Type: tele.ChatSuperGroup, Username: "somegroup"},
+			wantID: 0,
 		},
 		{
-			name:   "supergroup chat uses configured topic",
-			chat:   &tele.Chat{Type: tele.ChatSuperGroup},
-			wantID: configuredThreadID,
+			name: "private mode resolves configured topic",
+			cfg: runtimeConfig{
+				Bot: botConfig{
+					adminUsers: map[int64]struct{}{1001: {}},
+				},
+				groupTopics: map[string]int{"somegroup": 42},
+			},
+			chat:   &tele.Chat{Type: tele.ChatSuperGroup, Username: "somegroup"},
+			wantID: 42,
+		},
+		{
+			name: "private mode returns root for unknown group",
+			cfg: runtimeConfig{
+				Bot: botConfig{
+					adminUsers: map[int64]struct{}{1001: {}},
+				},
+				groupTopics: map[string]int{"somegroup": 42},
+			},
+			chat:   &tele.Chat{Type: tele.ChatSuperGroup, Username: "othergroup"},
+			wantID: 0,
 		},
 	}
 
@@ -90,9 +112,39 @@ func TestTopicThreadIDForChat(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := topicThreadIDForChat(tt.chat, configuredThreadID); got != tt.wantID {
-				t.Fatalf("topicThreadIDForChat() = %d, want %d", got, tt.wantID)
+			if got := resolveTopicThreadIDForChat(tt.chat, tt.cfg); got != tt.wantID {
+				t.Fatalf("resolveTopicThreadIDForChat() = %d, want %d", got, tt.wantID)
 			}
 		})
+	}
+}
+
+func TestEscapeTelegramMarkdown(t *testing.T) {
+	t.Parallel()
+
+	input := `a_b*c[d]e\` + "`" + `f`
+	got := escapeTelegramMarkdown(input)
+	want := `a\_b\*c\[d\]e\\\` + "`" + `f`
+	if got != want {
+		t.Fatalf("escapeTelegramMarkdown() = %q, want %q", got, want)
+	}
+}
+
+func TestGenCaptionEscapesDisplayName(t *testing.T) {
+	t.Parallel()
+
+	oldCfg := cfg
+	cfg = defaultRuntimeConfig()
+	t.Cleanup(func() {
+		cfg = oldCfg
+	})
+
+	user := &tele.User{
+		ID:        1234,
+		FirstName: "a_b*[x]",
+	}
+	caption := genCaption(user)
+	if !strings.Contains(caption, `[a\_b\*\[x\]](tg://user?id=1234)`) {
+		t.Fatalf("caption mention is not escaped correctly: %q", caption)
 	}
 }
