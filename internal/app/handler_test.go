@@ -10,6 +10,7 @@ import (
 
 	tele "gopkg.in/telebot.v3"
 	"toshiki-captcha-bot/internal/captcha"
+	"toshiki-captcha-bot/internal/settings"
 )
 
 func TestIsNextCaptchaAnswer(t *testing.T) {
@@ -108,6 +109,45 @@ type mockAdminCommandResponder struct {
 	lastText  string
 }
 
+type mockClearContext struct {
+	tele.Context
+	chat      *tele.Chat
+	sender    *tele.User
+	message   *tele.Message
+	sendErr   error
+	sendCount int
+	lastText  string
+}
+
+func (m *mockClearContext) Chat() *tele.Chat {
+	return m.chat
+}
+
+func (m *mockClearContext) Sender() *tele.User {
+	return m.sender
+}
+
+func (m *mockClearContext) Message() *tele.Message {
+	return m.message
+}
+
+func (m *mockClearContext) Send(what interface{}, _ ...interface{}) error {
+	m.sendCount++
+	if text, ok := what.(string); ok {
+		m.lastText = text
+	}
+	return m.sendErr
+}
+
+func mustValidatedHandlerConfig(t *testing.T, cfg settings.RuntimeConfig) settings.RuntimeConfig {
+	t.Helper()
+	cfg.Bot.Token = "test-token"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+	return cfg
+}
+
 func (m *mockAdminCommandResponder) Chat() *tele.Chat {
 	return m.chat
 }
@@ -185,6 +225,261 @@ func TestRenderCaptchaImageWithMissingAsset(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "load emoji asset key=does_not_exist") {
 		t.Fatalf("renderCaptchaImage error = %q, want emoji-asset load error", err.Error())
+	}
+}
+
+func TestOnClearAuthorizedSummary(t *testing.T) {
+	oldCfg := cfg
+	oldClearFn := clearManagedBotMessagesInChatFn
+	oldSendFn := sendWithConfiguredTopicFn
+	oldDeleteFn := deleteMessageFn
+	t.Cleanup(func() {
+		cfg = oldCfg
+		clearManagedBotMessagesInChatFn = oldClearFn
+		sendWithConfiguredTopicFn = oldSendFn
+		deleteMessageFn = oldDeleteFn
+	})
+
+	cfg = mustValidatedHandlerConfig(t, func() settings.RuntimeConfig {
+		c := settings.DefaultRuntimeConfig()
+		c.Bot.AdminUserIDs = []int64{42}
+		c.Groups = []settings.GroupTopicConfig{{ID: "@allowedgroup"}}
+		return c
+	}())
+
+	managedCalled := false
+	clearManagedBotMessagesInChatFn = func(chat *tele.Chat) (int, int) {
+		managedCalled = true
+		if chat == nil || chat.ID != -1001 {
+			t.Fatalf("clearManagedBotMessagesInChatFn chat = %+v, want id -1001", chat)
+		}
+		return 7, 2
+	}
+
+	var summary string
+	sendWithConfiguredTopicFn = func(chat *tele.Chat, what interface{}, parseMode tele.ParseMode, _ *tele.ReplyMarkup) (*tele.Message, error) {
+		if chat == nil || chat.ID != -1001 {
+			t.Fatalf("sendWithConfiguredTopicFn chat = %+v, want id -1001", chat)
+		}
+		if parseMode != tele.ModeDefault {
+			t.Fatalf("parseMode = %q, want %q", parseMode, tele.ModeDefault)
+		}
+		text, ok := what.(string)
+		if !ok {
+			t.Fatalf("summary payload type = %T, want string", what)
+		}
+		summary = text
+		return &tele.Message{Chat: chat}, nil
+	}
+
+	deleteMessageFn = func(msg tele.Editable) error {
+		if msg == nil {
+			t.Fatalf("deleteMessageFn got nil editable")
+		}
+		return nil
+	}
+
+	chat := &tele.Chat{ID: -1001, Type: tele.ChatSuperGroup, Username: "allowedgroup"}
+	ctx := &mockClearContext{
+		chat:    chat,
+		sender:  &tele.User{ID: 42},
+		message: &tele.Message{ID: 9, Chat: chat},
+	}
+
+	if err := onClear(ctx); err != nil {
+		t.Fatalf("onClear returned error: %v", err)
+	}
+
+	if !managedCalled {
+		t.Fatalf("clearManagedBotMessagesInChatFn was not called")
+	}
+	if ctx.sendCount != 0 {
+		t.Fatalf("context sendCount = %d, want 0 for authorized group clear path", ctx.sendCount)
+	}
+	wantSummary := "Messages cleared: 7.\nWarnings: 2 cleanup operations failed."
+	if summary != wantSummary {
+		t.Fatalf("summary = %q, want %q", summary, wantSummary)
+	}
+}
+
+func TestOnClearUnauthorizedSender(t *testing.T) {
+	oldCfg := cfg
+	oldClearFn := clearManagedBotMessagesInChatFn
+	oldSendFn := sendWithConfiguredTopicFn
+	t.Cleanup(func() {
+		cfg = oldCfg
+		clearManagedBotMessagesInChatFn = oldClearFn
+		sendWithConfiguredTopicFn = oldSendFn
+	})
+
+	cfg = mustValidatedHandlerConfig(t, func() settings.RuntimeConfig {
+		c := settings.DefaultRuntimeConfig()
+		c.Bot.AdminUserIDs = []int64{42}
+		c.Groups = []settings.GroupTopicConfig{{ID: "@allowedgroup"}}
+		return c
+	}())
+
+	managedCalled := false
+	clearManagedBotMessagesInChatFn = func(_ *tele.Chat) (int, int) {
+		managedCalled = true
+		return 0, 0
+	}
+
+	sendCalled := false
+	sendWithConfiguredTopicFn = func(_ *tele.Chat, _ interface{}, _ tele.ParseMode, _ *tele.ReplyMarkup) (*tele.Message, error) {
+		sendCalled = true
+		return nil, nil
+	}
+
+	chat := &tele.Chat{ID: -1001, Type: tele.ChatSuperGroup, Username: "allowedgroup"}
+	ctx := &mockClearContext{
+		chat:    chat,
+		sender:  &tele.User{ID: 99},
+		message: &tele.Message{ID: 9, Chat: chat},
+	}
+
+	if err := onClear(ctx); err != nil {
+		t.Fatalf("onClear returned error: %v", err)
+	}
+
+	if managedCalled {
+		t.Fatalf("clearManagedBotMessagesInChatFn should not be called for unauthorized sender")
+	}
+	if sendCalled {
+		t.Fatalf("sendWithConfiguredTopicFn should not be called for unauthorized sender")
+	}
+	if ctx.sendCount != 1 {
+		t.Fatalf("context sendCount = %d, want 1", ctx.sendCount)
+	}
+	if !strings.Contains(ctx.lastText, "Access denied: /clear") {
+		t.Fatalf("denial text = %q, expected access denied for /clear", ctx.lastText)
+	}
+}
+
+func TestOnClearPrivateChatGuidance(t *testing.T) {
+	oldCfg := cfg
+	oldClearFn := clearManagedBotMessagesInChatFn
+	oldSendFn := sendWithConfiguredTopicFn
+	oldDeleteFn := deleteMessageFn
+	t.Cleanup(func() {
+		cfg = oldCfg
+		clearManagedBotMessagesInChatFn = oldClearFn
+		sendWithConfiguredTopicFn = oldSendFn
+		deleteMessageFn = oldDeleteFn
+	})
+
+	cfg = mustValidatedHandlerConfig(t, func() settings.RuntimeConfig {
+		c := settings.DefaultRuntimeConfig()
+		c.Bot.AdminUserIDs = []int64{42}
+		c.Groups = []settings.GroupTopicConfig{{ID: "@allowedgroup"}}
+		return c
+	}())
+
+	managedCalled := false
+	clearManagedBotMessagesInChatFn = func(_ *tele.Chat) (int, int) {
+		managedCalled = true
+		return 0, 0
+	}
+
+	sendCalled := false
+	sendWithConfiguredTopicFn = func(_ *tele.Chat, _ interface{}, _ tele.ParseMode, _ *tele.ReplyMarkup) (*tele.Message, error) {
+		sendCalled = true
+		return nil, nil
+	}
+
+	deleteCalled := false
+	deleteMessageFn = func(_ tele.Editable) error {
+		deleteCalled = true
+		return nil
+	}
+
+	chat := &tele.Chat{ID: 42, Type: tele.ChatPrivate}
+	ctx := &mockClearContext{
+		chat:    chat,
+		sender:  &tele.User{ID: 42},
+		message: &tele.Message{ID: 9, Chat: chat},
+	}
+
+	if err := onClear(ctx); err != nil {
+		t.Fatalf("onClear returned error: %v", err)
+	}
+
+	if managedCalled {
+		t.Fatalf("clearManagedBotMessagesInChatFn should not be called for private chat guidance path")
+	}
+	if sendCalled {
+		t.Fatalf("sendWithConfiguredTopicFn should not be called for private chat guidance path")
+	}
+	if deleteCalled {
+		t.Fatalf("deleteMessageFn should not be called for private chat guidance path")
+	}
+	if ctx.sendCount != 1 {
+		t.Fatalf("context sendCount = %d, want 1 for private chat guidance", ctx.sendCount)
+	}
+	if ctx.lastText != "Run `/clear` inside a group chat." {
+		t.Fatalf("guidance text = %q, want exact private-chat guidance", ctx.lastText)
+	}
+}
+
+func TestOnClearChatNotAllowed(t *testing.T) {
+	oldCfg := cfg
+	oldClearFn := clearManagedBotMessagesInChatFn
+	oldSendFn := sendWithConfiguredTopicFn
+	oldDeleteFn := deleteMessageFn
+	t.Cleanup(func() {
+		cfg = oldCfg
+		clearManagedBotMessagesInChatFn = oldClearFn
+		sendWithConfiguredTopicFn = oldSendFn
+		deleteMessageFn = oldDeleteFn
+	})
+
+	cfg = mustValidatedHandlerConfig(t, func() settings.RuntimeConfig {
+		c := settings.DefaultRuntimeConfig()
+		c.Bot.AdminUserIDs = []int64{42}
+		c.Groups = []settings.GroupTopicConfig{{ID: "@allowedgroup"}}
+		return c
+	}())
+
+	managedCalled := false
+	clearManagedBotMessagesInChatFn = func(_ *tele.Chat) (int, int) {
+		managedCalled = true
+		return 0, 0
+	}
+
+	sendCalled := false
+	sendWithConfiguredTopicFn = func(_ *tele.Chat, _ interface{}, _ tele.ParseMode, _ *tele.ReplyMarkup) (*tele.Message, error) {
+		sendCalled = true
+		return nil, nil
+	}
+
+	deleteCalled := false
+	deleteMessageFn = func(_ tele.Editable) error {
+		deleteCalled = true
+		return nil
+	}
+
+	chat := &tele.Chat{ID: -1002, Type: tele.ChatSuperGroup, Username: "othergroup"}
+	ctx := &mockClearContext{
+		chat:    chat,
+		sender:  &tele.User{ID: 42},
+		message: &tele.Message{ID: 10, Chat: chat},
+	}
+
+	if err := onClear(ctx); err != nil {
+		t.Fatalf("onClear returned error: %v", err)
+	}
+
+	if managedCalled {
+		t.Fatalf("clearManagedBotMessagesInChatFn should not be called for not-allowed chat")
+	}
+	if sendCalled {
+		t.Fatalf("sendWithConfiguredTopicFn should not be called for not-allowed chat")
+	}
+	if deleteCalled {
+		t.Fatalf("deleteMessageFn should not be called for not-allowed chat")
+	}
+	if ctx.sendCount != 0 {
+		t.Fatalf("context sendCount = %d, want 0 for not-allowed chat path", ctx.sendCount)
 	}
 }
 
@@ -597,4 +892,51 @@ func TestResolveTestCaptchaTargetFromReply(t *testing.T) {
 			t.Fatalf("expected error for nil command message")
 		}
 	})
+}
+
+func TestIsBotCaptchaTarget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		user *tele.User
+		want bool
+	}{
+		{
+			name: "nil user",
+			user: nil,
+			want: false,
+		},
+		{
+			name: "native bot flag",
+			user: &tele.User{ID: 1, IsBot: true},
+			want: true,
+		},
+		{
+			name: "username suffix bot",
+			user: &tele.User{ID: 2, Username: "helperbot"},
+			want: true,
+		},
+		{
+			name: "username suffix bot uppercase",
+			user: &tele.User{ID: 3, Username: "HelperBOT"},
+			want: true,
+		},
+		{
+			name: "regular user",
+			user: &tele.User{ID: 4, Username: "andatoshiki"},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := isBotCaptchaTarget(tt.user)
+			if got != tt.want {
+				t.Fatalf("isBotCaptchaTarget(%+v) = %t, want %t", tt.user, got, tt.want)
+			}
+		})
+	}
 }

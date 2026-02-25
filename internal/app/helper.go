@@ -2,12 +2,26 @@ package app
 
 import (
 	"fmt"
+	"log"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	tele "gopkg.in/telebot.v3"
 	"toshiki-captcha-bot/internal/settings"
 )
+
+var managedMessagesIndex = struct {
+	mu     sync.Mutex
+	byChat map[int64]map[int]struct{}
+}{
+	byChat: make(map[int64]map[int]struct{}),
+}
+
+var deleteManagedBotMessageFn = func(msg tele.Editable) error {
+	return bot.Delete(msg)
+}
 
 func genCaption(user *tele.User) string {
 	desc := fmt.Sprintf(
@@ -100,6 +114,165 @@ func resolveTopicThreadIDForChat(chat *tele.Chat, config settings.RuntimeConfig)
 func sendWithConfiguredTopic(chat *tele.Chat, what interface{}, parseMode tele.ParseMode, markup *tele.ReplyMarkup) (*tele.Message, error) {
 	opts := buildSendOptionsWithTopic(parseMode, markup, topicThreadIDForChat(chat))
 	return bot.Send(chat, what, opts)
+}
+
+func scheduleBotMessageCleanup(msg *tele.Message, reason string) {
+	if msg == nil || msg.ID == 0 || bot == nil {
+		return
+	}
+	registerManagedBotMessage(msg)
+
+	ttl := cfg.Bot.MessageCleanup
+	if ttl <= 0 {
+		return
+	}
+
+	message := *msg
+	chatID := int64(0)
+	if message.Chat != nil {
+		chatID = message.Chat.ID
+	}
+
+	go func() {
+		time.Sleep(ttl)
+		if !takeManagedBotMessage(chatID, message.ID) {
+			return
+		}
+		if err := deleteManagedBotMessageFn(&message); err != nil {
+			if isMessageAlreadyDeletedError(err) {
+				return
+			}
+			log.Printf(
+				"warn: failed to auto delete bot message chat_id=%d message_id=%d reason=%s ttl=%s err=%v",
+				chatID,
+				message.ID,
+				reason,
+				ttl,
+				err,
+			)
+			registerManagedBotMessage(&message)
+			return
+		}
+	}()
+}
+
+func registerManagedBotMessage(msg *tele.Message) {
+	if msg == nil || msg.Chat == nil || msg.ID == 0 {
+		return
+	}
+	managedMessagesIndex.mu.Lock()
+	defer managedMessagesIndex.mu.Unlock()
+
+	chatIndex, ok := managedMessagesIndex.byChat[msg.Chat.ID]
+	if !ok {
+		chatIndex = make(map[int]struct{})
+		managedMessagesIndex.byChat[msg.Chat.ID] = chatIndex
+	}
+	chatIndex[msg.ID] = struct{}{}
+}
+
+func hasManagedBotMessage(chatID int64, messageID int) bool {
+	if messageID == 0 {
+		return false
+	}
+
+	managedMessagesIndex.mu.Lock()
+	defer managedMessagesIndex.mu.Unlock()
+
+	chatIndex, ok := managedMessagesIndex.byChat[chatID]
+	if !ok {
+		return false
+	}
+	_, exists := chatIndex[messageID]
+	return exists
+}
+
+func takeManagedBotMessage(chatID int64, messageID int) bool {
+	if messageID == 0 {
+		return false
+	}
+
+	managedMessagesIndex.mu.Lock()
+	defer managedMessagesIndex.mu.Unlock()
+
+	chatIndex, ok := managedMessagesIndex.byChat[chatID]
+	if !ok {
+		return false
+	}
+	if _, exists := chatIndex[messageID]; !exists {
+		return false
+	}
+	delete(chatIndex, messageID)
+	if len(chatIndex) == 0 {
+		delete(managedMessagesIndex.byChat, chatID)
+	}
+	return true
+}
+
+func removeManagedBotMessage(chatID int64, messageID int) bool {
+	return takeManagedBotMessage(chatID, messageID)
+}
+
+func managedMessageIDsForChat(chatID int64) []int {
+	managedMessagesIndex.mu.Lock()
+	defer managedMessagesIndex.mu.Unlock()
+
+	chatIndex, ok := managedMessagesIndex.byChat[chatID]
+	if !ok || len(chatIndex) == 0 {
+		return nil
+	}
+
+	ids := make([]int, 0, len(chatIndex))
+	for id := range chatIndex {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	return ids
+}
+
+func clearManagedBotMessagesInChat(chat *tele.Chat) (deleted int, failed int) {
+	if chat == nil {
+		return 0, 0
+	}
+
+	ids := managedMessageIDsForChat(chat.ID)
+	if len(ids) == 0 {
+		return 0, 0
+	}
+
+	for _, messageID := range ids {
+		if !takeManagedBotMessage(chat.ID, messageID) {
+			continue
+		}
+		if bot == nil {
+			failed++
+			registerManagedBotMessage(&tele.Message{ID: messageID, Chat: chat})
+			continue
+		}
+		msg := &tele.Message{ID: messageID, Chat: chat}
+		if err := deleteManagedBotMessageFn(msg); err != nil {
+			if isMessageAlreadyDeletedError(err) {
+				deleted++
+				continue
+			}
+			failed++
+			log.Printf("warn: failed to clear managed bot message chat_id=%d message_id=%d err=%v", chat.ID, messageID, err)
+			registerManagedBotMessage(msg)
+			continue
+		}
+		deleted++
+	}
+
+	return deleted, failed
+}
+
+func isMessageAlreadyDeletedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "message to delete not found") ||
+		strings.Contains(lower, "message not found")
 }
 
 func stringInSlice(a string, list []string) bool {

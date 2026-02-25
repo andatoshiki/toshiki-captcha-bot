@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -150,8 +151,6 @@ func TestEscapeTelegramMarkdown(t *testing.T) {
 }
 
 func TestGenCaptionEscapesDisplayName(t *testing.T) {
-	t.Parallel()
-
 	oldCfg := cfg
 	cfg = mustValidatedRuntimeConfig(t, settings.DefaultRuntimeConfig())
 	t.Cleanup(func() {
@@ -165,5 +164,100 @@ func TestGenCaptionEscapesDisplayName(t *testing.T) {
 	caption := genCaption(user)
 	if !strings.Contains(caption, `[a\_b\*\[x\]](tg://user?id=1234)`) {
 		t.Fatalf("caption mention is not escaped correctly: %q", caption)
+	}
+}
+
+func resetManagedMessagesIndexForTest() {
+	managedMessagesIndex.mu.Lock()
+	managedMessagesIndex.byChat = make(map[int64]map[int]struct{})
+	managedMessagesIndex.mu.Unlock()
+}
+
+func TestManagedMessageIndexTracking(t *testing.T) {
+	resetManagedMessagesIndexForTest()
+
+	msg := &tele.Message{
+		ID:   10,
+		Chat: &tele.Chat{ID: -1001},
+	}
+	registerManagedBotMessage(msg)
+
+	ids := managedMessageIDsForChat(-1001)
+	if len(ids) != 1 || ids[0] != 10 {
+		t.Fatalf("managed ids = %v, want [10]", ids)
+	}
+
+	if ok := hasManagedBotMessage(-1001, 10); !ok {
+		t.Fatalf("hasManagedBotMessage = false, want true")
+	}
+	if ok := removeManagedBotMessage(-1001, 10); !ok {
+		t.Fatalf("removeManagedBotMessage first call = false, want true")
+	}
+	if ok := removeManagedBotMessage(-1001, 10); ok {
+		t.Fatalf("removeManagedBotMessage second call = true, want false")
+	}
+	if got := managedMessageIDsForChat(-1001); len(got) != 0 {
+		t.Fatalf("managed ids after consume = %v, want empty", got)
+	}
+}
+
+func TestClearManagedBotMessagesInChatWithoutBot(t *testing.T) {
+	resetManagedMessagesIndexForTest()
+
+	oldBot := bot
+	bot = nil
+	t.Cleanup(func() {
+		bot = oldBot
+		resetManagedMessagesIndexForTest()
+	})
+
+	registerManagedBotMessage(&tele.Message{ID: 11, Chat: &tele.Chat{ID: -1001}})
+	registerManagedBotMessage(&tele.Message{ID: 12, Chat: &tele.Chat{ID: -1001}})
+	registerManagedBotMessage(&tele.Message{ID: 21, Chat: &tele.Chat{ID: -1002}})
+
+	deleted, failed := clearManagedBotMessagesInChat(&tele.Chat{ID: -1001})
+	if deleted != 0 {
+		t.Fatalf("deleted = %d, want 0 when bot is nil", deleted)
+	}
+	if failed != 2 {
+		t.Fatalf("failed = %d, want 2 when bot is nil", failed)
+	}
+
+	if got := managedMessageIDsForChat(-1001); len(got) != 2 {
+		t.Fatalf("managed ids for chat -1001 = %v, want len 2", got)
+	}
+	if got := managedMessageIDsForChat(-1002); len(got) != 1 || got[0] != 21 {
+		t.Fatalf("managed ids for chat -1002 = %v, want [21]", got)
+	}
+}
+
+func TestClearManagedBotMessagesInChatTreatsNotFoundAsDeleted(t *testing.T) {
+	resetManagedMessagesIndexForTest()
+
+	oldBot := bot
+	oldDeleteFn := deleteManagedBotMessageFn
+	bot = &tele.Bot{}
+	deleteManagedBotMessageFn = func(_ tele.Editable) error {
+		return errors.New("telegram: Bad Request: message to delete not found (400)")
+	}
+	t.Cleanup(func() {
+		bot = oldBot
+		deleteManagedBotMessageFn = oldDeleteFn
+		resetManagedMessagesIndexForTest()
+	})
+
+	chat := &tele.Chat{ID: -1001}
+	registerManagedBotMessage(&tele.Message{ID: 31, Chat: chat})
+
+	deleted, failed := clearManagedBotMessagesInChat(chat)
+	if deleted != 1 {
+		t.Fatalf("deleted = %d, want 1 for already-deleted message", deleted)
+	}
+	if failed != 0 {
+		t.Fatalf("failed = %d, want 0 for already-deleted message", failed)
+	}
+
+	if got := managedMessageIDsForChat(-1001); len(got) != 0 {
+		t.Fatalf("managed ids for chat -1001 = %v, want empty", got)
 	}
 }
