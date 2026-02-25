@@ -183,8 +183,8 @@ func TestRenderCaptchaImageWithMissingAsset(t *testing.T) {
 	if err == nil {
 		t.Fatalf("renderCaptchaImage expected error for missing asset key")
 	}
-	if !strings.Contains(err.Error(), "merge captcha layers") {
-		t.Fatalf("renderCaptchaImage error = %q, want merge error", err.Error())
+	if !strings.Contains(err.Error(), "load emoji asset key=does_not_exist") {
+		t.Fatalf("renderCaptchaImage error = %q, want emoji-asset load error", err.Error())
 	}
 }
 

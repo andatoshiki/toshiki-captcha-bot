@@ -9,13 +9,12 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	gim "github.com/codenoid/goimagemerge"
 	tele "gopkg.in/telebot.v3"
+	assetstore "toshiki-captcha-bot/assets"
 	"toshiki-captcha-bot/internal/captcha"
 )
 
@@ -800,24 +799,34 @@ func applyCaptchaChallenge(status *captcha.JoinStatus, challenge captchaChalleng
 }
 
 func renderCaptchaImage(answerKeys []string) ([]byte, error) {
+	bgImg, err := assetstore.LoadBackground()
+	if err != nil {
+		return nil, fmt.Errorf("load background asset: %w", err)
+	}
+
 	captchaGrids := make([]*gim.Grid, 0, len(answerKeys))
 	for i, key := range answerKeys {
+		emojiImg, err := assetstore.LoadEmojiByKey(key)
+		if err != nil {
+			return nil, fmt.Errorf("load emoji asset key=%s: %w", key, err)
+		}
+
 		x := 10
 		if i > 0 {
 			x = i * 100
 		}
 		captchaGrids = append(captchaGrids, &gim.Grid{
-			ImageFilePath: resolveAssetPath(fmt.Sprintf("./assets/image/emoji/%v.png", key)),
-			OffsetX:       x,
-			OffsetY:       120,
-			Rotate:        float64(rand.Intn(200)),
+			Image:   emojiImg,
+			OffsetX: x,
+			OffsetY: 120,
+			Rotate:  float64(rand.Intn(200)),
 		})
 	}
 
 	grids := []*gim.Grid{
 		{
-			ImageFilePath: resolveAssetPath("./gopherbg.jpg"),
-			Grids:         captchaGrids,
+			Image: bgImg,
+			Grids: captchaGrids,
 		},
 	}
 
@@ -832,35 +841,6 @@ func renderCaptchaImage(answerKeys []string) ([]byte, error) {
 	}
 
 	return img.Bytes(), nil
-}
-
-func resolveAssetPath(relPath string) string {
-	clean := filepath.Clean(relPath)
-	clean = strings.TrimPrefix(clean, "./")
-
-	candidates := []string{
-		filepath.Clean(relPath),
-		filepath.Join(".", clean),
-		filepath.Join("..", clean),
-		filepath.Join("..", "..", clean),
-		filepath.Join("..", "..", "..", clean),
-	}
-
-	if exePath, err := os.Executable(); err == nil && exePath != "" {
-		exeDir := filepath.Dir(exePath)
-		candidates = append(candidates,
-			filepath.Join(exeDir, clean),
-			filepath.Join(exeDir, "..", clean),
-		)
-	}
-
-	for _, candidate := range candidates {
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-
-	return filepath.Clean(relPath)
 }
 
 func isNextCaptchaAnswer(status captcha.JoinStatus, answer string) (bool, string) {
